@@ -5,7 +5,7 @@ config = dict(
     num_labels=42,
     log_interval=100,
     output_dir='/mnt/sda/shenhao/code/QA-TIGER/qa-tiger_clip_vitl14@336px',
-    weight='',
+    weight='/mnt/sda/shenhao/code/QA-TIGER/best/best.pt',
     pretrained_weight="base",
     data=dict(
         root='./data',
@@ -18,7 +18,7 @@ config = dict(
         frames_dir='./mnt/sda/shenhao/datasets/MUSIC-AVQA/frames',
         train_annot='./annots/music_avqa/music_avqa_train.json',
         valid_annot='./annots/music_avqa/music_avqa_val.json',
-        test_annot='./annots/music_avqa/music_avqa_test.json',
+        test_annot='./annots/music_avqa_r/avqa-test-headtail.json',
         test_annots=None,
         ans_quelen='./annots/music_avqa/answer2idx.json',
 
@@ -31,7 +31,7 @@ config = dict(
     ),
 
     hyper_params=dict(
-        gpus='0',
+        gpus='1',
         model_type="QA-TIGER_ViTL14@336px",
         model=dict(
             d_model=512,
@@ -40,7 +40,7 @@ config = dict(
             quest_dim=512,
             audio_dim=128,
             topK=7,
-            num_experts=10,
+            num_experts=7,
             encoder_type='ViT-L/14@336px',
         ),
         optim=dict(
