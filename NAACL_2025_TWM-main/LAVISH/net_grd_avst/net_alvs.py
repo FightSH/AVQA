@@ -57,7 +57,12 @@ class AVQA_Net(nn.Module):
         '''
 
         bs, t, c, h, w = visual_posi.shape
-
+        # 这行代码是在对音频数据进行形状重组（reshape）操作。
+        # 在原始输入中，audio 的形状是 [B, T, C]，其中：B 是批次大小 (batch size)，T 是时间步长 (time steps)，C 是通道数/特征维度
+        # audio.view(audio.size(0) * audio.size(1), -1) 这个操作将：
+        # 第一个维度：将批次和时间维度相乘合并成一个维度 (B*T)
+        # 第二个维度：使用 -1 参数自动计算，保持总元素数量不变
+        # 这样，audio_re 的形状就变成了 [B*T, C]，将二维序列数据（批次+时间步）展平为一维序列。
         audio_re = audio.view(audio.size(0) * audio.size(1), -1)
         bs = visual_posi.size(0)
         f_v, _ = self.visual_encoder(audio, visual_posi)
