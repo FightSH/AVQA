@@ -98,7 +98,7 @@ def extract_feats(params, model, load_image_fn):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("--gpu", dest='gpu', type=str, default='0, 1',
+    parser.add_argument("--gpu", dest='gpu', type=str, default='1',
                         help='Set CUDA_VISIBLE_DEVICES environment variable, optional')
     parser.add_argument("--output_dir", dest='output_dir', type=str, default='/mnt/sda/shenhao/datasets/MUSIC-AVQA/feats/res18_14x14',
                         help='directory to store features')
