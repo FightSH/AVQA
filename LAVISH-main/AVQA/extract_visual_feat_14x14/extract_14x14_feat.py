@@ -1,7 +1,7 @@
 import sys
 
 # path to MUSIC-AVQA_CVPR2022
-sys.path.append("/home/guangyao_li/projects/music_avqa/")
+sys.path.append("/home/shao/projects/music_avqa/")
 import shutil
 import subprocess
 import glob
@@ -15,7 +15,7 @@ from torch import nn
 import torch.nn.functional as F
 import pretrainedmodels
 from pretrainedmodels import utils
-from extract_visual_feat_14x14.nets_14x14_feat import AVQA_Fusion_Net
+from nets_14x14_feat import AVQA_Fusion_Net
 from torchvision import transforms
 
 print("\n\n---------------------- extract_14x14_feats -------------------\n\n")
@@ -100,11 +100,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--gpu", dest='gpu', type=str, default='0, 1',
                         help='Set CUDA_VISIBLE_DEVICES environment variable, optional')
-    parser.add_argument("--output_dir", dest='output_dir', type=str, default='./data/feats/res18_14x14/',
+    parser.add_argument("--output_dir", dest='output_dir', type=str, default='/mnt/sda/shenhao/datasets/MUSIC-AVQA/feats/res18_14x14',
                         help='directory to store features')
     parser.add_argument("--n_frame_steps", dest='n_frame_steps', type=int, default=480,
                         help='how many frames to sampler per video')
-    parser.add_argument("--video_path", dest='video_path', type=str, default='./data/frames',
+    parser.add_argument("--video_path", dest='video_path', type=str, default='/mnt/sda/shenhao/datasets/MUSIC-AVQA/frames',
                         help='path to video dataset')
     parser.add_argument("--model", dest="model", type=str, default='resnet18',
                         help='the CNN model you want to use to extract_feats')
