@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import os
+import os.path as osp
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms, utils
 import pandas as pd
@@ -10,6 +11,7 @@ from PIL import Image
 import time
 import random
 from ipdb import set_trace
+import soundfile as sf
 
 from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize
 
@@ -35,7 +37,7 @@ class AVQA_dataset(Dataset):
 	def __init__(self, label, audio_dir, video_res14x14_dir, transform=None, mode_flag='train'):
 
 
-		samples = json.load(open('./data/json/avqa-train.json', 'r'))
+		samples = json.load(open('/mnt/sda/shenhao/code/LAVISH/AVQA/data/json/avqa-train.json', 'r'))
 
 		# nax =  nne
 		ques_vocab = ['<pad>']
@@ -93,21 +95,23 @@ class AVQA_dataset(Dataset):
 		self.norm_std =  3.5928637981414795
 
 		### <----
-		
+
 
 	def __len__(self):
 		return len(self.samples)
 
 
 	def _wav2fbank(self, filename, filename2=None, idx=None):
+		if not osp.exists(filename):
+			raise FileNotFoundError(f"Audio file does not exist: {filename}")
 		# mixup
 		if filename2 == None:
-			waveform, sr = torchaudio.load(filename)
+			waveform, sr = torchaudio.load(filename, backend="soundfile")
 			waveform = waveform - waveform.mean()
 		# mixup
 		else:
-			waveform1, sr = torchaudio.load(filename)
-			waveform2, _ = torchaudio.load(filename2)
+			waveform1, sr = torchaudio.load(filename, backend="soundfile")
+			waveform2, _ = torchaudio.load(filename2, backend="soundfile")
 
 			waveform1 = waveform1 - waveform1.mean()
 			waveform2 = waveform2 - waveform2.mean()
@@ -129,7 +133,7 @@ class AVQA_dataset(Dataset):
 
 			mix_waveform = mix_lambda * waveform1 + (1 - mix_lambda) * waveform2
 			waveform = mix_waveform - mix_waveform.mean()
-		
+
 
 		## yb: align ##
 		if waveform.shape[1] > 16000*(1.95+0.1):
@@ -148,7 +152,7 @@ class AVQA_dataset(Dataset):
 		# target_length = int(1024 * (self.opt.audio_length/10)) ## for audioset: 10s
 		target_length = 192 ## yb: overwrite for swin
 
-		
+
 		########### ------> very important: audio normalized
 		fbank = (fbank - self.norm_mean) / (self.norm_std * 2)
 		### <--------
@@ -172,22 +176,16 @@ class AVQA_dataset(Dataset):
 			return fbank, mix_lambda
 
 	def __getitem__(self, idx):
-		
+
 		sample = self.samples[idx]
 		name = sample['video_id']
-		# audio = np.load(os.path.join(self.audio_dir, name + '.npy'))
-		# audio = audio[::6, :]
 
-		# visual_out_res18_path = '/home/guangyao_li/dataset/avqa-features/visual_14x14'
-		
-
-		### ---> video frame process 
-		
-		total_num_frames = len(glob.glob(os.path.join(self.video_res14x14_dir,'video_frames',name,'*.jpg')))
+		### ---> video frame process
+		total_num_frames = len(glob.glob(os.path.join('/mnt/sda/shenhao/datasets/MUSIC-AVQA/frame_1fps', name, '*.jpg')))
 		sample_indx = np.linspace(1, total_num_frames , num=10, dtype=int)
 		total_img = []
 		for tmp_idx in sample_indx:
-			tmp_img = torchvision.io.read_image(os.path.join(self.video_res14x14_dir,'video_frames',name, str("{:04d}".format(tmp_idx))+ '.jpg'))/255
+			tmp_img = torchvision.io.read_image(os.path.join('/mnt/sda/shenhao/datasets/MUSIC-AVQA/frame_1fps', name, str("{:06d}".format(tmp_idx))+ '.jpg'))/255
 			tmp_img = self.my_normalize(tmp_img)
 			total_img.append(tmp_img)
 		total_img = torch.stack(total_img)
@@ -204,27 +202,14 @@ class AVQA_dataset(Dataset):
 			neg_video_id = int(neg_frame_id / 60)
 			neg_frame_flag = neg_frame_id % 60
 			neg_video_name = self.video_list[neg_video_id]
-			
-			
 
-
-			total_num_frames = len(glob.glob(os.path.join(self.video_res14x14_dir,'video_frames',neg_video_name,'*.jpg')))
+			# 修改：移除对video_frames的依赖，直接使用frame_1fps目录
+			total_num_frames = len(glob.glob(os.path.join('/mnt/sda/shenhao/datasets/MUSIC-AVQA/frame_1fps', neg_video_name, '*.jpg')))
 			sample_indx = np.linspace(1, total_num_frames , num=60, dtype=int)
 
-
-			tmp_img = torchvision.io.read_image(os.path.join(self.video_res14x14_dir,'video_frames',neg_video_name, str("{:04d}".format(sample_indx[neg_frame_flag]))+ '.jpg'))/255
+			tmp_img = torchvision.io.read_image(os.path.join('/mnt/sda/shenhao/datasets/MUSIC-AVQA/frame_1fps', neg_video_name, str("{:06d}".format(sample_indx[neg_frame_flag]))+ '.jpg'))/255
 			visual_nega_clip = self.my_normalize(tmp_img)
-			# visual_nega_out_res18=np.load(os.path.join(self.video_res14x14_dir, neg_video_name + '.npy'))
-			# visual_nega_out_res18 = torch.from_numpy(visual_nega_out_res18)
 
-			# visual_nega_clip=visual_nega_out_res18[neg_frame_flag,:,:,:].unsqueeze(0)
-
-
-			# visual_nega_clip = total_img_neg[]
-			# set_trace()
-
-
-			
 			visual_nega.append(visual_nega_clip)
 		visual_nega = torch.stack(visual_nega)
 
@@ -253,12 +238,10 @@ class AVQA_dataset(Dataset):
 		label = torch.from_numpy(np.array(label)).long()
 
 
-
 		### ---> loading all audio frames
 		total_audio = []
 		for audio_sec in range(10):
-			
-			fbank, mix_lambda = self._wav2fbank(os.path.join(self.video_res14x14_dir,'raw_audio',name+'.wav'), idx=audio_sec)
+			fbank, mix_lambda = self._wav2fbank(os.path.join('/mnt/sda/shenhao/datasets/MUSIC-AVQA/audio', name+'.wav'), idx=audio_sec)
 			total_audio.append(fbank)
 		total_audio = torch.stack(total_audio)
 		### <----
@@ -281,15 +264,15 @@ class ToTensor(object):
 		label = sample['label']
 
 
-		return { 
-				'audio': sample['audio'], 
+		return {
+				'audio': sample['audio'],
 				'visual_posi': sample['visual_posi'],
 				'visual_nega': sample['visual_nega'],
 				'question': sample['question'],
 				'label': label}
 
-		# return { 
-		# 		'audio': torch.from_numpy(audio), 
+		# return {
+		# 		'audio': torch.from_numpy(audio),
 		# 		'visual_posi': sample['visual_posi'],
 		# 		'visual_nega': sample['visual_nega'],
 		# 		'question': sample['question'],

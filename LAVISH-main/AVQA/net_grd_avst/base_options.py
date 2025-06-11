@@ -18,18 +18,18 @@ class BaseOptions():
 
 	def initialize(self):
 		self.parser.add_argument(
-			"--audio_dir", type=str, default='/home/guangyao_li/dataset/avqa-features/feats/vggish', help="audio dir")
+			"--audio_dir", type=str, default='/mnt/sda/shenhao/datasets/MUSIC-AVQA/feats/vggish', help="audio dir")
 		# parser.add_argument(
 		#     "--video_dir", type=str, default='/home/guangyao_li/dataset/avqa/avqa-frames-1fps', help="video dir")
 		self.parser.add_argument(
-			"--video_res14x14_dir", type=str, default='/home/guangyao_li/dataset/avqa-features/visual_14x14', help="res14x14 dir")
+			"--video_res14x14_dir", type=str, default='/mnt/sda/shenhao/datasets/MUSIC-AVQA/feats/res18_14x14', help="res14x14 dir")
 		
 		self.parser.add_argument(
-			"--label_train", type=str, default="./data/json/avqa-train.json", help="train csv file")
+			"--label_train", type=str, default="/mnt/sda/shenhao/code/LAVISH/AVQA/data/json/avqa-train.json", help="train csv file")
 		self.parser.add_argument(
-			"--label_val", type=str, default="./data/json/avqa-val.json", help="val csv file")
+			"--label_val", type=str, default="/mnt/sda/shenhao/code/LAVISH/AVQA/data/json/avqa-val.json", help="val csv file")
 		self.parser.add_argument(
-			"--label_test", type=str, default="./data/json/avqa-test.json", help="test csv file")
+			"--label_test", type=str, default="/mnt/sda/shenhao/code/LAVISH/AVQA/data/json/avqa-test.json", help="test csv file")
 		self.parser.add_argument(
 			'--batch-size', type=int, default=32, metavar='N', help='input batch size for training (default: 16)')
 		self.parser.add_argument(
@@ -49,7 +49,7 @@ class BaseOptions():
 		self.parser.add_argument(
 			"--checkpoint", type=str, default='avst', help="save model name")
 		self.parser.add_argument(
-			'--gpu', type=str, default='0,1,2,3,4,5,6,7', help='gpu device number')
+			'--gpu', type=str, default='0,1,2,3', help='gpu device number')
 
 		### for AV-ada ###
 		self.parser.add_argument(

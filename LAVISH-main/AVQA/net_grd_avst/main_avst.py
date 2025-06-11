@@ -124,7 +124,7 @@ def test(model, val_loader):
 	model.eval()
 	total = 0
 	correct = 0
-	samples = json.load(open('./data/json/avqa-test.json', 'r'))
+	samples = json.load(open('/mnt/sda/shenhao/code/LAVISH/AVQA/data/json/avqa-test.json', 'r'))
 	A_count = []
 	A_cmp = []
 	V_count = []
@@ -229,7 +229,7 @@ def main():
 
 		# ===================================== load pretrained model ===============================================
 		####### concat model
-		pretrained_file = "grounding_gen/models_grounding_gen/main_grounding_gen_best.pt"
+		pretrained_file = "/mnt/sda/shenhao/code/LAVISH/AVQA/grounding_gen/models_grounding_gen/main_grounding_gen_best.pt"
 		checkpoint = torch.load(pretrained_file)
 		print("\n-------------- loading pretrained models --------------")
 		model_dict = model.state_dict()
