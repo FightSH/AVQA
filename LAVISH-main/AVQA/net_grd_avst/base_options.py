@@ -45,7 +45,7 @@ class BaseOptions():
 		self.parser.add_argument(
 			'--log-interval', type=int, default=50, metavar='N', help='how many batches to wait before logging training status')
 		self.parser.add_argument(
-			"--model_save_dir", type=str, default='net_grd_avst/avst_models/', help="model save dir")
+			"--model_save_dir", type=str, default='/mnt/sda/shenhao/code/LAVISH/AVQA/net_grd_avst/avst_models/', help="model save dir")
 		self.parser.add_argument(
 			"--checkpoint", type=str, default='avst', help="save model name")
 		self.parser.add_argument(
