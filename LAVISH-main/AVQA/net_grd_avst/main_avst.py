@@ -55,6 +55,7 @@ os.environ['REQUESTS_CA_BUNDLE'] = os.path.join(os.path.dirname(sys.argv[0]), ce
 print("\n--------------- Audio-Visual Spatial-Temporal Model --------------- \n")
 
 def batch_organize(out_match_posi,out_match_nega):
+
 	# audio B 512
 	# posi B 512
 	# nega B 512
@@ -205,11 +206,13 @@ def main():
 	if args.wandb:
 		wandb.init(config=args, project="AVQA",name=args.model_name)
 
-
+	print(torch.cuda.is_available())
+	print(torch.__version__)
 	torch.manual_seed(args.seed)
 
 	if args.model == 'AVQA_Fusion_Net':
 		model = AVQA_Fusion_Net(args)
+		# print(model)
 		model = nn.DataParallel(model)
 		model = model.to('cuda')
 	else:
