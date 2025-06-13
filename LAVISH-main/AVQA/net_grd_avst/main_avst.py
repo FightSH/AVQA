@@ -92,10 +92,17 @@ def train(args, model, train_loader, optimizer, criterion, epoch):
 
 		loss.backward()
 		optimizer.step()
+
 		if batch_idx % args.log_interval == 0:
-			print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-				epoch, batch_idx * len(audio), len(train_loader.dataset),
-					   100. * batch_idx / len(train_loader), loss.item()))
+			current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # 获取当前时间
+			print('[{time}] Train Epoch: {epoch} [{processed}/{total} ({percent:.0f}%)]\tLoss: {loss:.6f}'.format(
+				time=current_time,  # 当前时间
+				epoch=epoch,  # 当前训练轮数
+				processed=batch_idx * len(audio),  # 已处理样本数
+				total=len(train_loader.dataset),  # 总样本数
+				percent=100. * batch_idx / len(train_loader),  # 处理进度百分比
+				loss=loss.item()  # 当前批次损失值
+			))
 
 
 def eval(model, val_loader,epoch):

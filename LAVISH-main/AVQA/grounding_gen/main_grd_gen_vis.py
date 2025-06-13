@@ -6,13 +6,13 @@ import argparse
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from grounding_gen.dataloader_grd_gen_vis import *
-from grounding_gen.nets_grd_gen_vis import AVQA_AVatt_Grounding
+from dataloader_grd_gen_vis import *
+from nets_grd_gen_vis import AVQA_AVatt_Grounding
 import ast
 import json
 import numpy as np
 import torch.nn.functional as F
-
+import os
 # from sklearn import cluster, metrics
 # from skimage import img_as_ubyte
 # from sklearn.preprocessing import normalize
