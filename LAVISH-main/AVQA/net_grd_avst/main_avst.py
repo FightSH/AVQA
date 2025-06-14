@@ -100,34 +100,55 @@ def train(args, model, train_loader, optimizer, criterion, epoch):
 	model.train()
 	total_qa = 0
 	correct_qa = 0
+	# 定义梯度累积步数
+	accumulation_steps = 4  # 可以根据需要调整此值
+	
+	# 跟踪累积损失，用于日志记录
+	accumulated_loss = 0.0
+	
+	optimizer.zero_grad()  # 在开始时清零梯度而不是每个批次
+	
 	for batch_idx, sample in enumerate(train_loader):
 		audio,visual_posi,visual_nega, target, question = sample['audio'].to('cuda'), sample['visual_posi'].to('cuda'),sample['visual_nega'].to('cuda'), sample['label'].to('cuda'), sample['question'].to('cuda')
 
-		optimizer.zero_grad()
+		# 不再每个批次都清零梯度
+		# optimizer.zero_grad()
+		
 		out_qa, out_match_posi, out_match_nega = model(audio, visual_posi, visual_nega, question, 'train')
-		# out_qa, out_match_posi,out_match_nega = model(audio, visual_posi,visual_nega, question, stage='train')  
 		out_match,match_label=batch_organize(out_match_posi,out_match_nega)  
 		out_match,match_label = out_match.type(torch.FloatTensor).cuda(), match_label.type(torch.LongTensor).cuda()
 
 		loss_match=criterion(out_match,match_label)
 		loss_qa = criterion(out_qa, target)
 		loss = loss_qa + 0.5*loss_match
-
-
-
+		
+		# 计算梯度但不立即更新参数
+		# 如果batch大小不是平均分配的，需要根据实际批次大小缩放损失
+		loss = loss / accumulation_steps
 		loss.backward()
-		optimizer.step()
+		
+		# 累积用于日志显示的损失
+		accumulated_loss += loss.item()
 
-		if batch_idx % args.log_interval == 0:
-			current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # 获取当前时间
-			logging.info('[{time}] Train Epoch: {epoch} [{processed}/{total} ({percent:.0f}%)]\tLoss: {loss:.6f}'.format(
-				time=current_time,  # 当前时间
-				epoch=epoch,  # 当前训练轮数
-				processed=batch_idx * len(audio),  # 已处理样本数
-				total=len(train_loader.dataset),  # 总样本数
-				percent=100. * batch_idx / len(train_loader),  # 处理进度百分比
-				loss=loss.item()  # 当前批次损失值
-			))
+		# 只有在累积了指定步数的梯度后才更新参数
+		if (batch_idx + 1) % accumulation_steps == 0 or (batch_idx + 1) == len(train_loader):
+			optimizer.step()
+			optimizer.zero_grad()
+			
+			# 记录训练日志（基于累积的步数）
+			if batch_idx % args.log_interval == 0:
+				current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+				logging.info('[{time}] Train Epoch: {epoch} [{processed}/{total} ({percent:.0f}%)]\tLoss: {loss:.6f}'.format(
+					time=current_time,
+					epoch=epoch,
+					processed=batch_idx * len(audio),
+					total=len(train_loader.dataset),
+					percent=100. * batch_idx / len(train_loader),
+					loss=accumulated_loss * accumulation_steps  # 恢复累积的实际损失值
+				))
+				
+				# 重置累积损失
+				accumulated_loss = 0.0
 
 
 def eval(model, val_loader,epoch):
