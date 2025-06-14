@@ -10,6 +10,7 @@ from visual_net import resnet18
 from ipdb import set_trace
 import timm
 from einops import rearrange, repeat
+import time
 
 class VisualAdapter(nn.Module):
 	"""
@@ -19,6 +20,9 @@ class VisualAdapter(nn.Module):
 
 	def __init__(self, input_dim, output_dim, adapter_kind, dim_list=None, layer_idx=0, reduction_factor=16, opt=None ,use_bn=True, use_gate=True):
 		super().__init__()
+
+		
+
 		self.adapter_kind = adapter_kind
 		self.use_bn = use_bn
 		self.is_multimodal = opt.is_multimodal
@@ -202,6 +206,8 @@ class AVQA_Fusion_Net(nn.Module):
 	def __init__(self, opt):
 		super(AVQA_Fusion_Net, self).__init__()
 
+		self._has_printed_getitem = False 
+
 		self.opt = opt
 
 		# 音频特征处理的全连接层
@@ -315,6 +321,9 @@ class AVQA_Fusion_Net(nn.Module):
 			out_match_posi: 正样本匹配分数
 			out_match_nega: 负样本匹配分数
 		'''
+
+		start_getitem_time = time.time()
+
 		
 		# 获取输入的batch和时空维度信息
 		bs,t,c,h,w = visual_posi.shape
@@ -506,5 +515,12 @@ class AVQA_Fusion_Net(nn.Module):
 		combined_feature = torch.mul(feat, qst_feature)
 		combined_feature = self.tanh(combined_feature)
 		out_qa = self.fc_ans(combined_feature)              # [batch_size, ans_vocab_size]
+
+		# if self._has_printed_getitem is False:
+		# 	end_getitem_time = time.time()
+		# 	getitem_time = end_getitem_time - start_getitem_time
+		# 	print(f"单次 forward 耗时: {getitem_time:.4f} 秒")
+		# 	self._has_printed_getitem = True  #
+
 
 		return out_qa, out_match_posi,out_match_nega

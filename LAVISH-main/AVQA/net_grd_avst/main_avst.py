@@ -6,6 +6,7 @@ from base_options import BaseOptions
 from gpuinfo import GPUInfo 
 import os
 from datetime import datetime
+import time
 args = BaseOptions().parse()
 
 mygpu = GPUInfo.get_info()[0]
@@ -55,6 +56,7 @@ os.environ['CUDA_VISIBLE_DEVICES'] = '2,3'
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.cuda.amp import autocast, GradScaler  # 导入自动混合精度相关模块
 from ipdb import set_trace
 from dataloader_avst import *
 # from dataloader_avst_bk import *
@@ -106,33 +108,45 @@ def train(args, model, train_loader, optimizer, criterion, epoch):
 	# 跟踪累积损失，用于日志记录
 	accumulated_loss = 0.0
 	
+	# 创建 GradScaler 实例用于混合精度训练
+	scaler = GradScaler()
+	
 	optimizer.zero_grad()  # 在开始时清零梯度而不是每个批次
 	
 	for batch_idx, sample in enumerate(train_loader):
 		audio,visual_posi,visual_nega, target, question = sample['audio'].to('cuda'), sample['visual_posi'].to('cuda'),sample['visual_nega'].to('cuda'), sample['label'].to('cuda'), sample['question'].to('cuda')
 
-		# 不再每个批次都清零梯度
-		# optimizer.zero_grad()
-		
-		out_qa, out_match_posi, out_match_nega = model(audio, visual_posi, visual_nega, question, 'train')
-		out_match,match_label=batch_organize(out_match_posi,out_match_nega)  
-		out_match,match_label = out_match.type(torch.FloatTensor).cuda(), match_label.type(torch.LongTensor).cuda()
+		# 使用 autocast 上下文管理器启用混合精度
+		with autocast():
+			out_qa, out_match_posi, out_match_nega = model(audio, visual_posi, visual_nega, question, 'train')
+			out_match,match_label=batch_organize(out_match_posi,out_match_nega)  
+			out_match,match_label = out_match.type(torch.FloatTensor).cuda(), match_label.type(torch.LongTensor).cuda()
 
-		loss_match=criterion(out_match,match_label)
-		loss_qa = criterion(out_qa, target)
-		loss = loss_qa + 0.5*loss_match
+			loss_match=criterion(out_match,match_label)
+			loss_qa = criterion(out_qa, target)
+			loss = loss_qa + 0.5*loss_match
+			
+			# 如果batch大小不是平均分配的，需要根据实际批次大小缩放损失
+			loss = loss / accumulation_steps
 		
-		# 计算梯度但不立即更新参数
-		# 如果batch大小不是平均分配的，需要根据实际批次大小缩放损失
-		loss = loss / accumulation_steps
-		loss.backward()
+		# 统计反向传播耗时
+		torch.cuda.synchronize()
+		start_time = time.time()
+		
+		# 使用 scaler 进行反向传播
+		scaler.scale(loss).backward()
+		
+		torch.cuda.synchronize()
+		backward_time = time.time() - start_time
 		
 		# 累积用于日志显示的损失
 		accumulated_loss += loss.item()
 
 		# 只有在累积了指定步数的梯度后才更新参数
 		if (batch_idx + 1) % accumulation_steps == 0 or (batch_idx + 1) == len(train_loader):
-			optimizer.step()
+			# 使用 scaler 更新参数
+			scaler.step(optimizer)
+			scaler.update()
 			optimizer.zero_grad()
 			
 			# 记录训练日志（基于累积的步数）
@@ -146,9 +160,11 @@ def train(args, model, train_loader, optimizer, criterion, epoch):
 					percent=100. * batch_idx / len(train_loader),
 					loss=accumulated_loss * accumulation_steps  # 恢复累积的实际损失值
 				))
-				
+				logging.info(f'Backward time: {backward_time:.6f} seconds')
 				# 重置累积损失
 				accumulated_loss = 0.0
+
+			
 
 
 def eval(model, val_loader,epoch):

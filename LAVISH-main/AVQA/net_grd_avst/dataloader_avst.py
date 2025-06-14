@@ -21,6 +21,7 @@ import torchvision
 import torchaudio
 import glob
 import warnings
+import time
 warnings.filterwarnings('ignore')
 
 def ids_to_multinomial(id, categories):
@@ -36,6 +37,7 @@ class AVQA_dataset(Dataset):
 
 	def __init__(self, label, audio_dir, video_res14x14_dir, transform=None, mode_flag='train'):
 
+		self._has_printed_getitem = False 
 
 		samples = json.load(open('/mnt/sda/shenhao/code/LAVISH/AVQA/data/json/avqa-train.json', 'r'))
 
@@ -177,6 +179,8 @@ class AVQA_dataset(Dataset):
 
 	def __getitem__(self, idx):
 
+		start_getitem_time = time.time()
+
 		sample = self.samples[idx]
 		name = sample['video_id']
 
@@ -251,6 +255,15 @@ class AVQA_dataset(Dataset):
 
 		if self.transform:
 			sample = self.transform(sample)
+
+		# if self._has_printed_getitem is False:
+		# 	end_getitem_time = time.time()
+		# 	getitem_time = end_getitem_time - start_getitem_time
+		# 	print(f"单次 getitem 耗时: {getitem_time:.4f} 秒")
+		# 	self._has_printed_getitem = True  #
+
+		
+
 
 		return sample
 

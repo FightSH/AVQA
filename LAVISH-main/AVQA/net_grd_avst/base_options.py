@@ -43,7 +43,7 @@ class BaseOptions():
 		self.parser.add_argument(
 			'--seed', type=int, default=1, metavar='S', help='random seed (default: 1)')
 		self.parser.add_argument(
-			'--log-interval', type=int, default=50, metavar='N', help='how many batches to wait before logging training status')
+			'--log-interval', type=int, default=5, metavar='N', help='how many batches to wait before logging training status')
 		self.parser.add_argument(
 			"--model_save_dir", type=str, default='/mnt/sda/shenhao/code/AVQA/LAVISH-main/AVQA/net_grd_avst/avst_models/', help="model save dir")
 		self.parser.add_argument(
