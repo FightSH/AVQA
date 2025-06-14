@@ -5,29 +5,53 @@ import argparse
 from base_options import BaseOptions
 from gpuinfo import GPUInfo 
 import os
+from datetime import datetime
 args = BaseOptions().parse()
 
 mygpu = GPUInfo.get_info()[0]
 gpu_source = {}
 
-if 'N/A' in mygpu.keys():
-	for info in mygpu['N/A']:
-		if info in gpu_source.keys():
-			gpu_source[info] +=1
-		else:
-			gpu_source[info] =1
 
-for gpu_id in args.gpu:
-	gpu_id = str(gpu_id)
+import logging
 
-	if gpu_id not in gpu_source.keys():
-		print('go gpu:', gpu_id)
-		os.environ['CUDA_VISIBLE_DEVICES'] = gpu_id
-		break
-	elif gpu_source[gpu_id] < 1:
-		print('go gpu:', gpu_id)
-		os.environ['CUDA_VISIBLE_DEVICES'] = gpu_id
-		break
+# 获取时间戳字符串（不带/，便于文件名拼接）
+TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+os.makedirs(args.model_save_dir, exist_ok=True)
+
+log_path = os.path.join(args.model_save_dir, f"train_{TIMESTAMP}.log")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s: %(message)s',
+    handlers=[
+        logging.FileHandler(log_path, mode='a'),
+        logging.StreamHandler()
+    ]
+)
+
+
+# if 'N/A' in mygpu.keys():
+# 	for info in mygpu['N/A']:
+# 		if info in gpu_source.keys():
+# 			gpu_source[info] +=1
+# 		else:
+# 			gpu_source[info] =1
+
+# for gpu_id in args.gpu:
+# 	gpu_id = str(gpu_id)
+
+# 	if gpu_id not in gpu_source.keys():
+# 		logging.info(f'go gpu: {gpu_id}')
+# 		os.environ['CUDA_VISIBLE_DEVICES'] = gpu_id
+# 		break
+# 	elif gpu_source[gpu_id] < 1:
+# 		logging.info(f'go gpu: {gpu_id}')
+# 		os.environ['CUDA_VISIBLE_DEVICES'] = gpu_id
+# 		break
+
+os.environ['CUDA_VISIBLE_DEVICES'] = '2,3'
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -52,7 +76,7 @@ warnings.filterwarnings('ignore')
 import certifi
 os.environ['REQUESTS_CA_BUNDLE'] = os.path.join(os.path.dirname(sys.argv[0]), certifi.where())
 
-print("\n--------------- Audio-Visual Spatial-Temporal Model --------------- \n")
+logging.info("\n--------------- Audio-Visual Spatial-Temporal Model --------------- \n")
 
 def batch_organize(out_match_posi,out_match_nega):
 
@@ -80,7 +104,8 @@ def train(args, model, train_loader, optimizer, criterion, epoch):
 		audio,visual_posi,visual_nega, target, question = sample['audio'].to('cuda'), sample['visual_posi'].to('cuda'),sample['visual_nega'].to('cuda'), sample['label'].to('cuda'), sample['question'].to('cuda')
 
 		optimizer.zero_grad()
-		out_qa, out_match_posi,out_match_nega = model(audio, visual_posi,visual_nega, question, stage='train')  
+		out_qa, out_match_posi, out_match_nega = model(audio, visual_posi, visual_nega, question, 'train')
+		# out_qa, out_match_posi,out_match_nega = model(audio, visual_posi,visual_nega, question, stage='train')  
 		out_match,match_label=batch_organize(out_match_posi,out_match_nega)  
 		out_match,match_label = out_match.type(torch.FloatTensor).cuda(), match_label.type(torch.LongTensor).cuda()
 
@@ -94,8 +119,8 @@ def train(args, model, train_loader, optimizer, criterion, epoch):
 		optimizer.step()
 
 		if batch_idx % args.log_interval == 0:
-			current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # 获取当前时间
-			print('[{time}] Train Epoch: {epoch} [{processed}/{total} ({percent:.0f}%)]\tLoss: {loss:.6f}'.format(
+			current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # 获取当前时间
+			logging.info('[{time}] Train Epoch: {epoch} [{processed}/{total} ({percent:.0f}%)]\tLoss: {loss:.6f}'.format(
 				time=current_time,  # 当前时间
 				epoch=epoch,  # 当前训练轮数
 				processed=batch_idx * len(audio),  # 已处理样本数
@@ -121,7 +146,7 @@ def eval(model, val_loader,epoch):
 			total_qa += preds_qa.size(0)
 			correct_qa += (predicted == target).sum().item()
 
-	print('Accuracy qa: %.2f %%' % (100 * correct_qa / total_qa))
+	logging.info('Accuracy qa: %.2f %%' % (100 * correct_qa / total_qa))
 	# writer.add_scalar('metric/acc_qa',100 * correct_qa / total_qa, epoch)
 
 	return 100 * correct_qa / total_qa
@@ -176,34 +201,34 @@ def test(model, val_loader):
 				elif type[1] == 'Temporal':
 					AV_temp.append((predicted == target).sum().item())
 
-	print('Audio Counting Accuracy: %.2f %%' % (
+	logging.info('Audio Counting Accuracy: %.2f %%' % (
 			100 * sum(A_count)/len(A_count)))
-	print('Audio Cmp Accuracy: %.2f %%' % (
+	logging.info('Audio Cmp Accuracy: %.2f %%' % (
 			100 * sum(A_cmp) / len(A_cmp)))
-	print('Audio Accuracy: %.2f %%' % (
+	logging.info('Audio Accuracy: %.2f %%' % (
 			100 * (sum(A_count) + sum(A_cmp)) / (len(A_count) + len(A_cmp))))
-	print('Visual Counting Accuracy: %.2f %%' % (
+	logging.info('Visual Counting Accuracy: %.2f %%' % (
 			100 * sum(V_count) / len(V_count)))
-	print('Visual Loc Accuracy: %.2f %%' % (
+	logging.info('Visual Loc Accuracy: %.2f %%' % (
 			100 * sum(V_loc) / len(V_loc)))
-	print('Visual Accuracy: %.2f %%' % (
+	logging.info('Visual Accuracy: %.2f %%' % (
 			100 * (sum(V_count) + sum(V_loc)) / (len(V_count) + len(V_loc))))
-	print('AV Ext Accuracy: %.2f %%' % (
+	logging.info('AV Ext Accuracy: %.2f %%' % (
 			100 * sum(AV_ext) / len(AV_ext)))
-	print('AV counting Accuracy: %.2f %%' % (
+	logging.info('AV counting Accuracy: %.2f %%' % (
 			100 * sum(AV_count) / len(AV_count)))
-	print('AV Loc Accuracy: %.2f %%' % (
+	logging.info('AV Loc Accuracy: %.2f %%' % (
 			100 * sum(AV_loc) / len(AV_loc)))
-	print('AV Cmp Accuracy: %.2f %%' % (
+	logging.info('AV Cmp Accuracy: %.2f %%' % (
 			100 * sum(AV_cmp) / len(AV_cmp)))
-	print('AV Temporal Accuracy: %.2f %%' % (
+	logging.info('AV Temporal Accuracy: %.2f %%' % (
 			100 * sum(AV_temp) / len(AV_temp)))
 
-	print('AV Accuracy: %.2f %%' % (
+	logging.info('AV Accuracy: %.2f %%' % (
 			100 * (sum(AV_count) + sum(AV_loc)+sum(AV_ext)+sum(AV_temp)
 				   +sum(AV_cmp)) / (len(AV_count) + len(AV_loc)+len(AV_ext)+len(AV_temp)+len(AV_cmp))))
 
-	print('Overall Accuracy: %.2f %%' % (
+	logging.info('Overall Accuracy: %.2f %%' % (
 			100 * correct / total))
 
 	return 100 * correct / total
@@ -213,8 +238,8 @@ def main():
 	if args.wandb:
 		wandb.init(config=args, project="AVQA",name=args.model_name)
 
-	print(torch.cuda.is_available())
-	print(torch.__version__)
+	logging.info(torch.cuda.is_available())
+	logging.info(torch.__version__)
 	torch.manual_seed(args.seed)
 
 	if args.model == 'AVQA_Fusion_Net':
@@ -312,7 +337,10 @@ def main():
 				best_F = F
 				if args.wandb:
 					wandb.log({"val-best": best_F})
-				torch.save(model.state_dict(), args.model_save_dir + args.checkpoint + ".pt")
+				# 添加时间戳到模型文件名
+				timestamp = datetime.now().strftime("%Y%m%d_")
+				model_save_path = args.model_save_dir + timestamp + args.checkpoint + ".pt"
+				torch.save(model.state_dict(), model_save_path)
 			if count == args.early_stop:
 				exit()
 
@@ -327,3 +355,5 @@ def main():
 
 if __name__ == '__main__':
 	main()
+
+

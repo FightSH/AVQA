@@ -25,15 +25,15 @@ class BaseOptions():
 			"--video_res14x14_dir", type=str, default='/mnt/sda/shenhao/datasets/MUSIC-AVQA/feats/res18_14x14', help="res14x14 dir")
 		
 		self.parser.add_argument(
-			"--label_train", type=str, default="/mnt/sda/shenhao/code/LAVISH/AVQA/data/json/avqa-train.json", help="train csv file")
+			"--label_train", type=str, default="/mnt/sda/shenhao/code/AVQA/LAVISH-main/AVQA/data/json/avqa-train.json", help="train csv file")
 		self.parser.add_argument(
-			"--label_val", type=str, default="/mnt/sda/shenhao/code/LAVISH/AVQA/data/json/avqa-val.json", help="val csv file")
+			"--label_val", type=str, default="/mnt/sda/shenhao/code/AVQA/LAVISH-main/AVQA/data/json/avqa-val.json", help="val csv file")
 		self.parser.add_argument(
-			"--label_test", type=str, default="/mnt/sda/shenhao/code/LAVISH/AVQA/data/json/avqa-test.json", help="test csv file")
+			"--label_test", type=str, default="/mnt/sda/shenhao/code/AVQA/LAVISH-main/AVQA/data/json/avqa-test.json", help="test csv file")
 		self.parser.add_argument(
 			'--batch-size', type=int, default=32, metavar='N', help='input batch size for training (default: 16)')
 		self.parser.add_argument(
-			'--epochs', type=int, default=80, metavar='N', help='number of epochs to train (default: 60)')
+			'--epochs', type=int, default=15, metavar='N', help='number of epochs to train (default: 60)')
 		self.parser.add_argument(
 			'--lr', type=float, default=1e-4, metavar='LR', help='learning rate (default: 3e-4)')
 		self.parser.add_argument(
@@ -45,11 +45,11 @@ class BaseOptions():
 		self.parser.add_argument(
 			'--log-interval', type=int, default=50, metavar='N', help='how many batches to wait before logging training status')
 		self.parser.add_argument(
-			"--model_save_dir", type=str, default='/mnt/sda/shenhao/code/LAVISH/AVQA/net_grd_avst/avst_models/', help="model save dir")
+			"--model_save_dir", type=str, default='/mnt/sda/shenhao/code/AVQA/LAVISH-main/AVQA/net_grd_avst/avst_models/', help="model save dir")
 		self.parser.add_argument(
 			"--checkpoint", type=str, default='avst', help="save model name")
 		self.parser.add_argument(
-			'--gpu', type=str, default='0,1,2,3', help='gpu device number')
+			'--gpu', type=str, default='2,3', help='gpu device number')
 
 		### for AV-ada ###
 		self.parser.add_argument(
