@@ -126,7 +126,7 @@ class RAVQA(nn.Module):
         返回:
             视频偏置的logits
         '''
-        # video_emb = self.visual_bert(inputs_embeds=inputs)  # 将视频嵌入输入到VisualBert
+        video_emb = self.visual_bert(inputs_embeds=inputs)  # 将视频嵌入输入到VisualBert
         #video_emb = grad_mul_const(video_emb.pooler_output, 0.0)  # 梯度乘以常数(已注释)
         v_bias_logits = self.v_bias(input)  # 通过MLP获取视频偏置logits
         return v_bias_logits
