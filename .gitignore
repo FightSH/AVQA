@@ -192,3 +192,10 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+LAVISH-main/AVQA/脚本
+LAVISH-main/AVQA/net_grd_avst/avst_models/20250614_avst.pt
+.gitignore
+QA-TIGER/qa-tiger_clip_vitl14@336px/2025-06-17-22-49-20_seed713/code_snapshot.zip
+QA-TIGER/qa-tiger_clip_vitl14@336px/2025-06-17-22-49-20_seed713/events.out.tfevents.1750171760.junbo-Super-Server.61659.0
+QA-TIGER/qa-tiger_clip_vitl14@336px/2025-06-17-22-49-20_seed713/log.txt
+QA-TIGER/qa-tiger_clip_vitl14@336px/2025-06-17-22-56-27_seed713/code_snapshot.zip

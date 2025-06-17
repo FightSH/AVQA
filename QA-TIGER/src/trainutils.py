@@ -83,7 +83,9 @@ def get_model(cfg: dict,
     hyper_params = cfg.hyper_params
 
     if hyper_params.model_type.startswith('QA-TIGER'):
-        model = QA_TIGER(**hyper_params.model)
+        model_args = dict(**hyper_params.model)
+        model_args['mccd'] = cfg.mccd  # 新增，将mccd加入参数
+        model = QA_TIGER(**model_args)
     elif hyper_params.model_type.startswith('TSPM'):
         model = TSPM(**hyper_params.model)
     else:
@@ -275,7 +277,8 @@ def train(cfg: dict,
 
         loss = 0
         target = reshaped_data['label']
-        ce_loss = criterion(output['out'], target)
+        ce_loss = criterion(output, target)
+        #ce_loss = criterion(output['out'], target)
         loss += ce_loss
         losses = [('ce_loss', ce_loss)]
         for key in output:

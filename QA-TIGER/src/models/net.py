@@ -7,9 +7,10 @@ import torch.nn.functional as F
 
 from torch import Tensor
 from typing import Dict
+from .MCCD.layer import MCCD_MLP  # 导入MCCD的MLP模块
 
-from src.models.encoders import CLIP_TEncoder  # 导入CLIP文本编码器
-from src.models.modules import (
+from .encoders import CLIP_TEncoder  # 导入CLIP文本编码器
+from .modules import (
     Projection, QstGrounding,  # 导入自定义模块：投影、问题定位
     TempMoE, AVQCrossAttn,  # 导入自定义模块：时序混合专家、音视问交叉注意力
     PatchSelecter  # 导入自定义模块：Patch选择器
@@ -28,12 +29,15 @@ class QA_TIGER(nn.Module):
                  late_fusion: bool = False,   # 是否使用后期融合策略 (当前模型结构中未直接体现)
                  nce_loss: bool = False,      # 是否使用NCE损失 (当前模型结构中未直接体现)
                  encoder_type: str = 'ViT-L/14@336px', # CLIP文本编码器的类型
+                 mccd=None,
                  **kwargs
     ):
         super(QA_TIGER, self).__init__()
 
         self.nce_loss = nce_loss  # 存储nce_loss标志
         self.late_fusion = late_fusion  # 存储late_fusion标志
+        self.mccd = mccd
+        
 
         # 定义各种输入特征的投影层，将它们投影到统一的d_model维度
         self.audio_proj = Projection(audio_dim, d_model)  # 音频特征投影
@@ -66,6 +70,19 @@ class QA_TIGER(nn.Module):
         self.quest_proj.apply(self.init_weight)
         self.patch_proj.apply(self.init_weight)
         self.head.apply(self.init_weight)
+
+        # 引入MCCD模块
+        # bias learner
+        if mccd is not None and mccd['flag'] is True:
+            if mccd['bias_learner']['q_bias']:
+                self.q_bias = MCCD_MLP(dimensions=mccd['mlp']['dimensions'])
+            if mccd['bias_learner']['a_bias']:
+                self.a_bias = MCCD_MLP(dimensions=mccd['mlp']['dimensions'])
+            if mccd['bias_learner']['v_bias']:
+                self.v_bias = MCCD_MLP(dimensions=mccd['mlp']['dimensions'])
+
+
+
 
     # 权重初始化方法
     def init_weight(self, m):
@@ -118,9 +135,12 @@ class QA_TIGER(nn.Module):
 
         # 特征投影: 将各种模态的特征投影到统一的d_model维度
         audio = self.audio_proj(audio)  # [B, T, D]
+        print(f'audio shape: {audio.shape}')
         video = self.video_proj(video)  # [B, T, D]
+        print(f'video shape: {video.shape}')
         words = self.words_proj(words)  # [B, 77, D] (假设CLIP词序列长度为77)
         quest = self.quest_proj(quest)  # [B, D]
+        print(f'quest shape: {quest.shape}')
         patch = self.patch_proj(patch)  # [B, T, P, D]
 
         # 多模态交互与融合
@@ -141,4 +161,77 @@ class QA_TIGER(nn.Module):
         fusion = self.head_act(fusion)  # ReLU激活
         output = self.head(fusion)  # 线性层输出最终的分类logits: [B, num_answers]
         return_dict.update({'out': output})  # 将输出添加到返回字典中
-        return return_dict
+
+
+
+
+        # MCCD模块
+        if self.mccd is not None and self.mccd['flag'] is True:
+            q_bias_logits, a_bias_logits, v_bias_logits = None, None, None
+            if self.mccd['bias_learner']['q_bias']:
+                q_bias_logits = self.get_bias_classifier_logits_q(quest)
+                print(f'q_bias_logits shape: {q_bias_logits.shape}')
+            if self.mccd['bias_learner']['a_bias']:
+                a_bias_logits = self.get_bias_classifier_logits_a(audio)
+                print(f'a_bias_logits shape: {a_bias_logits.shape}')
+            if self.mccd['bias_learner']['v_bias']:
+                v_bias_logits = self.get_bias_classifier_logits_v(video)
+                print(f'v_bias_logits shape: {v_bias_logits.shape}')
+
+        print(f'output shape: {output.shape}')  # 输出形状: [B, num_answers]
+        # return return_dict
+        return {
+            'out': output,
+            'fusion_logits': output,
+            'q_bias_logits': q_bias_logits,
+            'a_bias_logits': a_bias_logits,
+            'v_bias_logits': v_bias_logits
+        }
+
+
+
+    def get_bias_classifier_logits_q(self, inputs):
+        '''
+        获取问题偏置分类器的logits
+        参数:
+            inputs: VisualBert的文本输入
+        返回:
+            问题偏置的logits
+        '''
+        # que_emb = self.visual_bert(
+        #     input_ids=inputs['input_ids'],
+        #     position_ids=inputs['position_ids'],
+        #     attention_mask=inputs['attention_mask']
+        # )
+        #que_emb = grad_mul_const(que_emb.pooler_output, 0.0)  # 梯度乘以常数(已注释)
+        q_bias_logits = self.q_bias(inputs)  # 通过MLP获取问题偏置logits
+        return q_bias_logits
+
+    def get_bias_classifier_logits_a(self, inputs):
+        '''
+        获取音频偏置分类器的logits
+        参数:
+            inputs: 音频嵌入表示
+        返回:
+            音频偏置的logits
+        '''
+        # audio_emb = self.visual_bert(inputs_embeds=inputs)  # 将音频嵌入输入到VisualBert
+        #audio_emb = grad_mul_const(audio_emb.pooler_output, 0.0)  # 梯度乘以常数(已注释)
+        a_bias_logits = self.a_bias(inputs)  # 通过MLP获取音频偏置logits
+        return a_bias_logits
+
+    def get_bias_classifier_logits_v(self, inputs):
+        '''
+        获取视频偏置分类器的logits
+        参数:
+            inputs: 视频嵌入表示
+        返回:
+            视频偏置的logits
+        '''
+        # video_emb = self.visual_bert(inputs_embeds=inputs)  # 将视频嵌入输入到VisualBert
+        #video_emb = grad_mul_const(video_emb.pooler_output, 0.0)  # 梯度乘以常数(已注释)
+        v_bias_logits = self.v_bias(inputs)  # 通过MLP获取视频偏置logits
+        return v_bias_logits
+
+
+        

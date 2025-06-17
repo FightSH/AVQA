@@ -2,26 +2,31 @@ from __future__ import print_function
 import os
 import sys
 from pathlib import Path
+import torch  # noqa: E402
+import torch.nn as nn  # noqa: E402
+import torch.distributed as dist  # noqa: E402
+import models.MCCD.criterion as CRITERION  # noqa: E402
+from utils import (
+    arg_parse, seed_everything, setting, get_logger,
+    set_logger, logging_config
+)
+from trainutils import (
+    get_model, get_dloaders, get_optim, 
+    train, evaluate, sync_processes, test
+)
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[1]
 sys.path.append(ROOT.as_posix())
 
-import torch
-import torch.nn as nn
-import torch.distributed as dist
 
-import os
+
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 
-from src.utils import (
-    arg_parse, seed_everything, setting, get_logger,
-    set_logger, logging_config
-)
-from src.trainutils import (
-    get_model, get_dloaders, get_optim, 
-    train, evaluate, sync_processes, test
-)
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+
+
+
 
 def main():
     args = arg_parse()
@@ -38,7 +43,12 @@ def main():
     
     best_acc = 0
     best_epoch = -1
-    criterion = nn.CrossEntropyLoss()
+
+    if cfg['mccd']['flag'] is True:
+        criterion = CRITERION.MCCD_Criterion(cfg.mccd, logger)
+    else:
+        criterion = nn.CrossEntropyLoss()
+    
     
     sync_processes()
     for epoch in range(1, cfg.epochs + 1):
