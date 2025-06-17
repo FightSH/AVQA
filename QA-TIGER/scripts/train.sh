@@ -1,4 +1,5 @@
 # !/bin/bash
+# CUDA_VISIBLE_DEVICES=1 python train.py --config $config --mode 'train'
 
 if [[ $# -eq 2 ]] ; then
     config=$1
@@ -8,5 +9,5 @@ else
     exit 1
 fi
 
-CUDA_VISIBLE_DEVICES=$gpu_idx python src/train.py \
+CUDA_VISIBLE_DEVICES=$gpu_idx python /mnt/sda/shenhao/code/AVQA/QA-TIGER/src/train.py \
     --config $config --mode 'train'
