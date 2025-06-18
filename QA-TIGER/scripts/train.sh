@@ -1,5 +1,5 @@
 # !/bin/bash
-# CUDA_VISIBLE_DEVICES=1 python train.py --config $config --mode 'train'
+# CUDA_VISIBLE_DEVICES=1 python train.py --mode 'train'
 
 if [[ $# -eq 2 ]] ; then
     config=$1

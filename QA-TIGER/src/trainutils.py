@@ -342,7 +342,8 @@ def evaluate(cfg: dict,
 
             total += predicted.size(0)
             correct += (predicted == target).sum().item()
-            loss += criterion(output['out'], target) / len(val_loader)
+            # loss += criterion(output['out'], target) / len(val_loader)
+            loss += criterion(output, target) / len(val_loader)
             for idx, (modal_type, qst_type) in enumerate(zip(qst_types[0], qst_types[1])):
                 gather_idx = qtype2idx[modal_type][qst_type]
                 tot_tensor[gather_idx] += 1

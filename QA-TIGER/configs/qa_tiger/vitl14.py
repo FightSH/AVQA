@@ -5,7 +5,7 @@ config = dict(
     num_labels=42,
     log_interval=100,
     output_dir='/mnt/sda/shenhao/code/AVQA/QA-TIGER/qa-tiger_clip_vitl14@336px',
-    weight='/mnt/sda/shenhao/code/AVQA/QA-TIGER/best/best.pt',
+    weight='/mnt/sda/shenhao/code/AVQA/QA-TIGER/qa-tiger_clip_vitl14@336px/2025-06-18-12-34-16_seed713/best.pt',
     pretrained_weight="base",
     mccd=dict(
         flag=True,
@@ -21,7 +21,7 @@ config = dict(
         ),
         loss_weight=dict(
             major_loss_weight=1,
-            distribution_loss_weight=0.01,     # 0.01
+            distribution_loss_weight=0.001,     # 0.01
             euclidean_distance_fusion_q_weight=0.333,
             euclidean_distance_fusion_a_weight=0.333,
             euclidean_distance_fusion_v_weight=0.333,
@@ -49,7 +49,7 @@ config = dict(
         frames_dir='/mnt/sda/shenhao/datasets/MUSIC-AVQA/frames',
         train_annot='./annots/music_avqa/music_avqa_train.json',
         valid_annot='./annots/music_avqa/music_avqa_val.json',
-        test_annot='./annots/music_avqa_r/avqa-test-headtail.json',
+        test_annot='./annots/music_avqa/music_avqa_test.json',
         test_annots=None,
         ans_quelen='./annots/music_avqa/answer2idx.json',
 

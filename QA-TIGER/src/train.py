@@ -60,6 +60,7 @@ def main():
                     writer.add_scalar(f'train/lr', current_lr, epoch)
                 
         logger.info(f"\n-------------- training epoch {epoch} --------------")
+        
         train(cfg, epoch, device, d_loaders['train'], optim, criterion, model, writer)
         
         if (dist.is_initialized() and cur_rank == 0) or not dist.is_initialized():
@@ -67,7 +68,7 @@ def main():
         
         # evaluation
         sync_processes()
-        criterion = nn.CrossEntropyLoss()
+        
         acc, loss = evaluate(cfg, epoch, device, d_loaders['val'], criterion, model, writer)
         
         # scheduling

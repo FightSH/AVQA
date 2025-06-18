@@ -135,12 +135,12 @@ class QA_TIGER(nn.Module):
 
         # 特征投影: 将各种模态的特征投影到统一的d_model维度
         audio = self.audio_proj(audio)  # [B, T, D]
-        print(f'audio shape: {audio.shape}')
+        # print(f'audio shape: {audio.shape}')
         video = self.video_proj(video)  # [B, T, D]
-        print(f'video shape: {video.shape}')
+        # print(f'video shape: {video.shape}')
         words = self.words_proj(words)  # [B, 77, D] (假设CLIP词序列长度为77)
         quest = self.quest_proj(quest)  # [B, D]
-        print(f'quest shape: {quest.shape}')
+        # print(f'quest shape: {quest.shape}')
         patch = self.patch_proj(patch)  # [B, T, P, D]
 
         # 多模态交互与融合
@@ -169,16 +169,19 @@ class QA_TIGER(nn.Module):
         if self.mccd is not None and self.mccd['flag'] is True:
             q_bias_logits, a_bias_logits, v_bias_logits = None, None, None
             if self.mccd['bias_learner']['q_bias']:
-                q_bias_logits = self.get_bias_classifier_logits_q(quest)
-                print(f'q_bias_logits shape: {q_bias_logits.shape}')
-            if self.mccd['bias_learner']['a_bias']:
-                a_bias_logits = self.get_bias_classifier_logits_a(audio)
-                print(f'a_bias_logits shape: {a_bias_logits.shape}')
-            if self.mccd['bias_learner']['v_bias']:
-                v_bias_logits = self.get_bias_classifier_logits_v(video)
-                print(f'v_bias_logits shape: {v_bias_logits.shape}')
 
-        print(f'output shape: {output.shape}')  # 输出形状: [B, num_answers]
+                q_bias_logits = self.get_bias_classifier_logits_q(quest)
+                # print(f'q_bias_logits shape: {q_bias_logits.shape}')
+            if self.mccd['bias_learner']['a_bias']:
+                a_bias_logits_pooled = audio.mean(dim=1)
+                a_bias_logits = self.get_bias_classifier_logits_a(a_bias_logits_pooled)
+                # print(f'a_bias_logits shape: {a_bias_logits.shape}')
+            if self.mccd['bias_learner']['v_bias']:
+                v_bias_logits_pooled = video.mean(dim=1)
+                v_bias_logits = self.get_bias_classifier_logits_v(v_bias_logits_pooled)
+                # print(f'v_bias_logits shape: {v_bias_logits.shape}')
+
+        # print(f'output shape: {output.shape}')  # 输出形状: [B, num_answers]
         # return return_dict
         return {
             'out': output,
