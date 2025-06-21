@@ -46,10 +46,17 @@ class MCCD_Criterion(nn.Module):
             euclidean_distance_fusion_q_loss = self.euclidean_distance(output_fusion_logits, output_q_bias_logits).mean()
             euclidean_distance_fusion_a_loss = self.euclidean_distance(output_fusion_logits, output_a_bias_logits).mean()
             euclidean_distance_fusion_v_loss = self.euclidean_distance(output_fusion_logits, output_v_bias_logits).mean()
-            distribution_loss = self.euclidean_distance_fusion_q_weight / (euclidean_distance_fusion_q_loss + 0.00001)
-            distribution_loss += self.euclidean_distance_fusion_a_weight / (euclidean_distance_fusion_a_loss + 0.00001)
-            distribution_loss += self.euclidean_distance_fusion_v_weight / (euclidean_distance_fusion_v_loss + 0.00001)
-            distribution_loss *= self.distribution_loss_weight
+            # distribution_loss = self.euclidean_distance_fusion_q_weight / (euclidean_distance_fusion_q_loss + 0.00001)
+            # distribution_loss += self.euclidean_distance_fusion_a_weight / (euclidean_distance_fusion_a_loss + 0.00001)
+            # distribution_loss += self.euclidean_distance_fusion_v_weight / (euclidean_distance_fusion_v_loss + 0.00001)
+            # distribution_loss *= self.distribution_loss_weight
+
+
+            distribution_loss = self.distribution_loss_weight * (
+                self.euclidean_distance_fusion_q_weight * euclidean_distance_fusion_q_loss +
+                self.euclidean_distance_fusion_a_weight * euclidean_distance_fusion_a_loss + 
+                self.euclidean_distance_fusion_v_weight * euclidean_distance_fusion_v_loss
+            )
 
             # 相同分母版本
             # euclidean_distance_fusion_q_loss = self.euclidean_distance_fusion_q_weight * self.euclidean_distance(output_fusion_logits, output_q_bias_logits).mean()

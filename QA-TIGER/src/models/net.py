@@ -173,11 +173,11 @@ class QA_TIGER(nn.Module):
                 q_bias_logits = self.get_bias_classifier_logits_q(quest)
                 # print(f'q_bias_logits shape: {q_bias_logits.shape}')
             if self.mccd['bias_learner']['a_bias']:
-                a_bias_logits_pooled = audio.mean(dim=1)
+                a_bias_logits_pooled = ap_global.mean(dim=1)
                 a_bias_logits = self.get_bias_classifier_logits_a(a_bias_logits_pooled)
                 # print(f'a_bias_logits shape: {a_bias_logits.shape}')
             if self.mccd['bias_learner']['v_bias']:
-                v_bias_logits_pooled = video.mean(dim=1)
+                v_bias_logits_pooled = vp_global.mean(dim=1)
                 v_bias_logits = self.get_bias_classifier_logits_v(v_bias_logits_pooled)
                 # print(f'v_bias_logits shape: {v_bias_logits.shape}')
 

@@ -23,7 +23,7 @@ sys.path.append(ROOT.as_posix())
 
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 
-# os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 
 
