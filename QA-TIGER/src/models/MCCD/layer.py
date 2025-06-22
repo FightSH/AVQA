@@ -3,7 +3,7 @@ import torch.nn.functional as F
 
 
 class MCCD_MLP(nn.Module):
-    def __init__(self, dimensions, input_dim=512, activation='relu', dropout=0.):
+    def __init__(self, dimensions, input_dim=512, activation='relu', dropout=0.1):
         super(MCCD_MLP, self).__init__()
         self.input_dim = input_dim
         self.dimensions = dimensions

@@ -21,18 +21,18 @@ config = dict(
         ),
         loss_weight=dict(
             major_loss_weight=1,
-            distribution_loss_weight=0.01,     # 0.01
-            euclidean_distance_fusion_q_weight=0,
-            euclidean_distance_fusion_a_weight=0.5,
-            euclidean_distance_fusion_v_weight=0.5,
+            distribution_loss_weight=0.2,     # 0.01
+            euclidean_distance_fusion_q_weight=0.2,
+            euclidean_distance_fusion_a_weight=0.4,
+            euclidean_distance_fusion_v_weight=0.4,
             cycle_Kl_loss_weight=0.333,
-            cycle_KL_a_q_weight=0,
-            cycle_KL_q_v_weight=0,
-            cycle_KL_v_a_weight=0.333,
+            cycle_KL_a_q_weight=0.333,
+            cycle_KL_q_v_weight=0.333,
+            cycle_KL_v_a_weight=0.4,
         ),
         mlp=dict(
             input_dim=512,
-            dimensions=[ 512, 256, 42 ],
+            dimensions=[ 512, 256,42 ],
         )
 
 

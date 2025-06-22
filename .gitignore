@@ -199,3 +199,5 @@ events.out.tfevents.*
 # .vscode/
 launch.json
 *.out
+*.wandb
+*.json
