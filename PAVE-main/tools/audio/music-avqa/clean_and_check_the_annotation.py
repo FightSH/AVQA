@@ -43,7 +43,8 @@ def replace_templates(json_file):
 
 
 # json_file = 'avqa-test.json'  # Path to your JSON file
-json_file = 'avqa-train.json'
+# json_file = 'avqa-train.json'
+json_file = '/mnt/sda/shenhao/code/AVQA/QA-TIGER/data/annots/music_avqa/music_avqa_val.json'
 
 updated_data = replace_templates(json_file)
 
@@ -51,7 +52,7 @@ updated_data = replace_templates(json_file)
 # with open('updated_avqa-test.json', 'w') as outfile:
 #     json.dump(updated_data, outfile, indent=4)
     
-with open('updated_avqa-train.json', 'w') as outfile:
+with open('updated_avqa-val.json', 'w') as outfile:
     json.dump(updated_data, outfile, indent=4)
 
 print("Templates replaced and saved to 'updated_questions.json'")

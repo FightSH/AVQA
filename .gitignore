@@ -201,3 +201,4 @@ launch.json
 *.out
 *.wandb
 *.json
+**/checkpoints/

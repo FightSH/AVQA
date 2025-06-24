@@ -3,8 +3,8 @@ import json
 import os
 
 
-origin_json_file = '/depot/schaterj/data/3d/work_dir/zhuoming_temp/run_llama/data/video_instruction_tuning/music_avqa/updated_avqa-train.json'
-save_json_file = '/depot/schaterj/data/3d/work_dir/zhuoming_temp/run_llama/data/video_instruction_tuning/music_avqa/music_avqa_train_instruct_duplicate_audio.json'
+origin_json_file = '/mnt/sda/shenhao/code/AVQA/PAVE-main/tools/music_avqa_annots/updated_avqa-val.json'
+save_json_file = '/mnt/sda/shenhao/code/AVQA/PAVE-main/tools/music_avqa_annots/music_avqa_val_instruct_duplicate_audio.json'
 
 origin_file_content = json.load(open(origin_json_file))
 
