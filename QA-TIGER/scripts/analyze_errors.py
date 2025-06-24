@@ -10,8 +10,7 @@ import pandas as pd
 from pathlib import Path
 from typing import Dict, List, Any
 import matplotlib.pyplot as plt
-import seaborn as sns
-from collections import Counter
+from collections import Counter, defaultdict
 
 def load_error_data(error_file: str) -> List[Dict]:
     """加载错误数据文件"""
@@ -25,7 +24,7 @@ def analyze_error_patterns(errors: List[Dict]) -> Dict[str, Any]:
     # 按问题类型分析
     question_types = []
     for error in errors:
-        qtype = error['sample_info']['question_type']
+        qtype = error['question_type']
         if isinstance(qtype, list):
             qtype_str = f"{qtype[0]}/{qtype[1]}" if len(qtype) >= 2 else str(qtype)
         else:
@@ -35,29 +34,52 @@ def analyze_error_patterns(errors: List[Dict]) -> Dict[str, Any]:
     type_counts = Counter(question_types)
     analysis['error_by_type'] = dict(type_counts)
     
-    # 置信度分析
-    confidences = [error['confidence'] for error in errors]
-    analysis['confidence_stats'] = {
-        'mean': sum(confidences) / len(confidences) if confidences else 0,
-        'min': min(confidences) if confidences else 0,
-        'max': max(confidences) if confidences else 0,
-        'std': pd.Series(confidences).std() if confidences else 0
-    }
-    
     # 最常见的错误答案组合
     error_pairs = []
     for error in errors:
-        true_ans = error['sample_info']['answer']
+        true_ans = error['true_answer']
         pred_ans = error['predicted_answer']
         error_pairs.append(f"{true_ans} -> {pred_ans}")
-    
+
     common_errors = Counter(error_pairs).most_common(20)
     analysis['common_error_pairs'] = common_errors
-    
+
     # 按视频ID分析
-    video_errors = Counter([error['sample_info']['video_id'] for error in errors])
+    video_errors = Counter([error['video_name'] for error in errors])
     analysis['errors_by_video'] = dict(video_errors.most_common(20))
+
+    # 按视频和问题的详细错误分析
+    video_question_errors = defaultdict(lambda: defaultdict(lambda: {'count': 0, 'true_answers': set(), 'predicted_answers': set()}))
+    for error in errors:
+        video_name = error['video_name']
+        question = error['question_content']
+        true_ans = error['true_answer']
+        pred_ans = error['predicted_answer']
+        
+        # 处理问题类型
+        qtype = error['question_type']
+        if isinstance(qtype, list):
+            qtype_str = f"{qtype[0]}/{qtype[1]}" if len(qtype) >= 2 else str(qtype)
+        else:
+            qtype_str = str(qtype)
+        
+        video_question_errors[video_name][question]['count'] += 1
+        video_question_errors[video_name][question]['true_answers'].add(true_ans)
+        video_question_errors[video_name][question]['predicted_answers'].add(pred_ans)
+        video_question_errors[video_name][question]['question_type'] = qtype_str
     
+    # 转换为普通字典并处理集合为列表
+    analysis['errors_by_video_details'] = {}
+    for video, questions in video_question_errors.items():
+        analysis['errors_by_video_details'][video] = {}
+        for question, details in questions.items():
+            analysis['errors_by_video_details'][video][question] = {
+                'count': details['count'],
+                'question_type': details['question_type'],
+                'true_answers': list(details['true_answers']),
+                'predicted_answers': list(details['predicted_answers'])
+            }
+
     return analysis
 
 def create_visualizations(errors: List[Dict], output_dir: str):
@@ -68,7 +90,7 @@ def create_visualizations(errors: List[Dict], output_dir: str):
     # 1. 错误分布按问题类型
     question_types = []
     for error in errors:
-        qtype = error['sample_info']['question_type']
+        qtype = error['question_type']
         if isinstance(qtype, list):
             qtype_str = f"{qtype[0]}/{qtype[1]}" if len(qtype) >= 2 else str(qtype)
         else:
@@ -85,23 +107,9 @@ def create_visualizations(errors: List[Dict], output_dir: str):
     plt.tight_layout()
     plt.savefig(output_path / 'errors_by_question_type.png', dpi=300, bbox_inches='tight')
     plt.close()
-    
-    # 2. 置信度分布
-    confidences = [error['confidence'] for error in errors]
-    plt.figure(figsize=(10, 6))
-    plt.hist(confidences, bins=50, edgecolor='black', alpha=0.7)
-    plt.title('错误预测的置信度分布')
-    plt.xlabel('置信度')
-    plt.ylabel('频次')
-    plt.axvline(sum(confidences)/len(confidences), color='red', linestyle='--', 
-                label=f'平均值: {sum(confidences)/len(confidences):.3f}')
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(output_path / 'confidence_distribution.png', dpi=300, bbox_inches='tight')
-    plt.close()
-    
+
     # 3. 错误数量按视频
-    video_errors = Counter([error['sample_info']['video_id'] for error in errors])
+    video_errors = Counter([error['video_name'] for error in errors])
     top_videos = dict(video_errors.most_common(20))
     
     plt.figure(figsize=(15, 6))
@@ -123,8 +131,6 @@ def generate_report(errors: List[Dict], analysis: Dict[str, Any], output_file: s
     
     report.append(f"## 总体统计")
     report.append(f"- 总错误数: {len(errors)}")
-    report.append(f"- 平均置信度: {analysis['confidence_stats']['mean']:.3f}")
-    report.append(f"- 置信度标准差: {analysis['confidence_stats']['std']:.3f}")
     report.append("")
     
     report.append("## 按问题类型错误分布")
@@ -142,6 +148,16 @@ def generate_report(errors: List[Dict], analysis: Dict[str, Any], output_file: s
     for video_id, count in list(analysis['errors_by_video'].items())[:10]:
         report.append(f"- {video_id}: {count} 个错误")
     report.append("")
+
+    report.append("## 按视频和问题的错误详情")
+    for video, questions in analysis['errors_by_video_details'].items():
+        report.append(f"### {video}")
+        for question, details in questions.items():
+            report.append(f"- **问题**: {question}")
+            report.append(f"  - 错误次数: {details['count']}")
+            report.append(f"  - 正确答案: {', '.join(details['true_answers'])}")
+            report.append(f"  - 错误答案: {', '.join(details['predicted_answers'])}")
+        report.append("")
     
     # 保存报告
     with open(output_file, 'w', encoding='utf-8') as f:
@@ -154,13 +170,14 @@ def export_error_details(errors: List[Dict], output_file: str):
     data = []
     for error in errors:
         row = {
-            'question_id': error['sample_info'].get('question_id', ''),
-            'video_id': error['sample_info']['video_id'],
-            'question': error['sample_info']['question_content'],
-            'true_answer': error['sample_info']['answer'],
+            'question_id': error.get('question_id', ''),
+            'video_name': error['video_name'],
+            'question': error['question_content'],
+            'true_answer': error['true_answer'],
             'predicted_answer': error['predicted_answer'],
-            'confidence': error['confidence'],
-            'question_type': str(error['sample_info']['question_type']),
+            'question_type': str(error['question_type']),
+            'predicted_answer_id': error.get('predicted_answer_id', ''),
+            'true_answer_id': error.get('true_answer_id', ''),
             'epoch': error.get('epoch', ''),
             'batch_idx': error.get('batch_idx', ''),
         }
@@ -173,7 +190,6 @@ def export_error_details(errors: List[Dict], output_file: str):
 def main():
     parser = argparse.ArgumentParser(description='分析错误记录文件')
     parser.add_argument('--error_file', required=True, help='错误记录JSON文件路径')
-    parser.add_argument('--output_dir', required=True, help='输出目录')
     parser.add_argument('--create_plots', action='store_true', help='是否生成可视化图表')
     
     args = parser.parse_args()
@@ -187,9 +203,10 @@ def main():
     print("分析错误模式...")
     analysis = analyze_error_patterns(errors)
     
-    # 创建输出目录
-    output_path = Path(args.output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
+    # 获取错误文件所在目录并创建analyze子目录作为输出目录
+    error_file_path = Path(args.error_file)
+    output_dir = error_file_path.parent / "analyze"
+    output_dir.mkdir(parents=True, exist_ok=True)
     
     # 生成报告
     report_file = output_path / 'error_analysis_report.md'
@@ -210,7 +227,9 @@ def main():
         print("生成可视化图表...")
         create_visualizations(errors, str(output_path))
     
-    print("\\n分析完成!")
+    print("\n分析完成! 结果已保存到错误文件所在目录")
 
 if __name__ == '__main__':
     main()
+
+# python analyze_errors.py --error_file /mnt/sda/shenhao/code/AVQA/QA-TIGER/qa-tiger_clip_vitl14@336px/2025-06-24-17-16-40_seed713/test_errors.json

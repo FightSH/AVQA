@@ -64,6 +64,7 @@ class ErrorAnalyzer:
             'question_type': sample_info.get('question_type'),
             'predicted_answer': self._convert_answer_id_to_text(predicted_answer),
             'true_answer': self._convert_answer_id_to_text(true_answer_id),
+            'video_name': sample_info.get('name'),
             'predicted_answer_id': predicted_answer,
             'true_answer_id': true_answer_id,
             'epoch': epoch,

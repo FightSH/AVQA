@@ -15,7 +15,7 @@ from .modules import (
     TempMoE, AVQCrossAttn,  # 导入自定义模块：时序混合专家、音视问交叉注意力
     PatchSelecter  # 导入自定义模块：Patch选择器
 )
-from .TWM.net_encoders import AMS  # 导入自适应多尺度稀疏混合专家模型
+# from .TWM.net_encoders import AMS  # 导入自适应多尺度稀疏混合专家模型
 
 
 # 定义QA-TIGER模型类，继承自nn.Module
