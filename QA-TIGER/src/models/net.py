@@ -15,6 +15,7 @@ from .modules import (
     TempMoE, AVQCrossAttn,  # 导入自定义模块：时序混合专家、音视问交叉注意力
     PatchSelecter  # 导入自定义模块：Patch选择器
 )
+from .TWM.net_encoders import AMS  # 导入自适应多尺度稀疏混合专家模型
 
 
 # 定义QA-TIGER模型类，继承自nn.Module
@@ -50,6 +51,11 @@ class QA_TIGER(nn.Module):
         self.quest_encoder = CLIP_TEncoder(encoder_type)
         self.quest_encoder.freeze()  # 冻结文本编码器的参数，不参与训练
 
+        # self.a_attn = AVQCrossAttn(d_model, 8)  # 音频-注意力模块
+        # self.v_attn = AVQCrossAttn(d_model, 8)  # 视频-注意力模块
+        self.a_attn = nn.MultiheadAttention(d_model, 8 )
+        self.v_attn = nn.MultiheadAttention(d_model, 8 )
+        
         # 定义模型的核心组件
         self.crs_attn = AVQCrossAttn(d_model, 8)  # 音频-视频-问题交叉注意力模块
         self.patch_selecter = PatchSelecter(d_model, 8)  # Patch选择模块
@@ -142,6 +148,20 @@ class QA_TIGER(nn.Module):
         quest = self.quest_proj(quest)  # [B, D]
         # print(f'quest shape: {quest.shape}')
         patch = self.patch_proj(patch)  # [B, T, P, D]
+
+
+        # 增加一个自注意力模块
+        # audio,temp = self.a_attn(audio, audio, words)
+        # video,temp = self.v_attn(video, video, words)
+        audio = audio.transpose(0, 1)  # [T, B, D]
+        audio, _ = self.a_attn(audio, audio, audio)
+        audio = audio.transpose(0, 1)  # [B, T, D]
+
+        video = video.transpose(0, 1)
+        video, _ = self.v_attn(video, video, video)
+        video = video.transpose(0, 1)
+
+
 
         # 多模态交互与融合
         # 1. 音频-视频-问题交叉注意力

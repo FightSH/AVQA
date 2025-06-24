@@ -14,6 +14,7 @@ from trainutils import (
     get_model, get_dloaders, get_optim, 
     train, evaluate, sync_processes, test
 )
+from scripts.error_analyze import ErrorAnalyzer  # noqa: E402
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[1]
@@ -34,6 +35,9 @@ def main():
     writer, timestamp = set_logger(cfg)
     logger = get_logger()
     save_dir = os.path.join(cfg.output_dir, timestamp)
+    
+    error_analyzer_train = ErrorAnalyzer(save_dir, mode='train')
+    error_analyzer_val = ErrorAnalyzer(save_dir, mode='val')
     
     logging_config(cfg)
     seed_everything(cfg.seed)
@@ -61,7 +65,7 @@ def main():
                 
         logger.info(f"\n-------------- training epoch {epoch} --------------")
         
-        train(cfg, epoch, device, d_loaders['train'], optim, criterion, model, writer)
+        train(cfg, epoch, device, d_loaders['train'], optim, criterion, model, writer, error_analyzer_train)
         
         if (dist.is_initialized() and cur_rank == 0) or not dist.is_initialized():
             logger.info(f"\n-------------- validation epoch {epoch} --------------")
@@ -69,7 +73,7 @@ def main():
         # evaluation
         sync_processes()
         
-        acc, loss = evaluate(cfg, epoch, device, d_loaders['val'], criterion, model, writer)
+        acc, loss = evaluate(cfg, epoch, device, d_loaders['val'], criterion, model, writer, error_analyzer_val)
         
         # scheduling
         if cfg.hyper_params.sched.name == 'ReduceLROnPlateau':
@@ -114,7 +118,24 @@ def main():
             update_dict[name] = param
         model.load_state_dict(update_dict, strict=False)
 
-        test(cfg, device, d_loaders, model)
+        error_analyzer_test = ErrorAnalyzer(save_dir, mode='test')
+        test(cfg, device, d_loaders, model, error_analyzer_test)
+        
+        if isinstance(cfg.data.test_annots, (list, tuple)):
+            for idx, test_annot in enumerate(cfg.data.test_annots):
+                logger.info(f"\nTesting with Best validation model... {test_annot}")
+                cfg.data.test_annot = test_annot
+                d_loaders = get_dloaders(cfg)['test']
+                test(cfg, device, d_loaders, model)
+
+    if not cfg.debug:
+        if (dist.is_initialized() and dist.get_rank() == 0) or not dist.is_initialized():
+            logger.info("保存错误分析结果...")
+            error_analyzer_train.save_errors()
+            error_analyzer_train.save_summary()
+            error_analyzer_val.save_errors()
+            error_analyzer_val.save_summary()
+        
         if isinstance(cfg.data.test_annots, (list, tuple)):
             for idx, test_annot in enumerate(cfg.data.test_annots):
                 logger.info(f"\nTesting with Best validation model... {test_annot}")

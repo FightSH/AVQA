@@ -260,6 +260,7 @@ def train(cfg: dict,
           criterion: nn.Module,
           model: nn.Module,
           writer: SummaryWriter = None,
+          error_analyzer = None,
           ):
     logger = get_logger()
 
@@ -278,7 +279,6 @@ def train(cfg: dict,
         loss = 0
         target = reshaped_data['label']
         ce_loss = criterion(output, target)
-        #ce_loss = criterion(output['out'], target)
         loss += ce_loss
         losses = [('ce_loss', ce_loss)]
         for key in output:
@@ -288,6 +288,26 @@ def train(cfg: dict,
         losses.append(('total_loss', loss))
         loss.backward()
         optimizer.step()
+
+        # 记录训练错误（可选，通常只在验证时记录）
+        if error_analyzer is not None and cfg.get('record_train_errors', False):
+            with torch.no_grad():
+                predicted_probs = F.softmax(output if isinstance(output, torch.Tensor) else output['out'], dim=1)
+                predicted_labels = torch.argmax(predicted_probs, dim=1)
+                
+                for i in range(len(target)):
+                    if predicted_labels[i] != target[i]:
+                        sample_info = {
+                            'question_type': [sample['type'][0][i], sample['type'][1][i]],
+                            'question_content': sample.get('question', ['Unknown'])[i] if 'question' in sample else 'Unknown',
+                            'answer': target[i].item()
+                        }
+                        error_analyzer.record_error(
+                            sample_info=sample_info,
+                            predicted_answer=predicted_labels[i].item(),
+                            epoch=epoch,
+                            batch_idx=batch_idx
+                        )
 
         losses = gather_losses(epoch, batch_idx, tot_batch,
                                losses, writer, device)
@@ -321,7 +341,8 @@ def evaluate(cfg: dict,
              val_loader: DataLoader,
              criterion: nn.Module,
              model: nn.Module,
-             writer: SummaryWriter = None):
+             writer: SummaryWriter = None,
+             error_analyzer = None):
     global qtype2idx
 
     logger = get_logger()
@@ -338,12 +359,31 @@ def evaluate(cfg: dict,
             qst_types = sample['type']
             target = reshaped_data['label']
             output = model(reshaped_data)
-            _, predicted = torch.max(output['out'].data, 1)
+            
+            # 获取预测结果
+            output_logits = output['out'] if isinstance(output, dict) else output
+            _, predicted = torch.max(output_logits.data, 1)
 
             total += predicted.size(0)
             correct += (predicted == target).sum().item()
-            # loss += criterion(output['out'], target) / len(val_loader)
             loss += criterion(output, target) / len(val_loader)
+            
+            # 记录错误预测
+            if error_analyzer is not None:
+                for idx in range(len(target)):
+                    if predicted[idx] != target[idx]:
+                        sample_info = {
+                            'question_type': [qst_types[0][idx], qst_types[1][idx]],
+                            'question_content': sample.get('question', ['Unknown'])[idx] if 'question' in sample else 'Unknown',
+                            'answer': target[idx].item()
+                        }
+                        error_analyzer.record_error(
+                            sample_info=sample_info,
+                            predicted_answer=predicted[idx].item(),
+                            epoch=epoch,
+                            batch_idx=batch_idx
+                        )
+            
             for idx, (modal_type, qst_type) in enumerate(zip(qst_types[0], qst_types[1])):
                 gather_idx = qtype2idx[modal_type][qst_type]
                 tot_tensor[gather_idx] += 1
@@ -397,11 +437,11 @@ def evaluate(cfg: dict,
 
     return acc, loss
 
-
 def test(cfg: dict,
          device: torch.device,
          val_loader: DataLoader,
-         model: nn.Module):
+         model: nn.Module,
+         error_analyzer = None):
     global qtype2idx
 
     logger = get_logger()
@@ -418,14 +458,35 @@ def test(cfg: dict,
             qst_types = sample['type']
             target = reshaped_data['label']
             output = model(reshaped_data)
-            _, predicted = torch.max(output['out'].data, 1)
+            
+            # 获取预测结果
+            output_logits = output['out'] if isinstance(output, dict) else output
+            _, predicted = torch.max(output_logits.data, 1)
+            
             total += predicted.size(0)
             correct += (predicted == target).sum().item()
+            
+            # 更新各问题类型的统计信息
             for idx, (modal_type, qst_type) in enumerate(zip(qst_types[0], qst_types[1])):
                 gather_idx = qtype2idx[modal_type][qst_type]
                 tot_tensor[gather_idx] += 1
                 correct_tensor[gather_idx] += (predicted[idx] == target[idx]).long().item()
-
+            
+            # 记录测试错误
+            if error_analyzer is not None:
+                for idx in range(len(target)):
+                    if predicted[idx] != target[idx]:
+                        sample_info = {
+                            'question_type': [qst_types[0][idx], qst_types[1][idx]],
+                            'question_content': sample.get('question', ['Unknown'])[idx] if 'question' in sample else 'Unknown',
+                            'answer': target[idx].item()
+                        }
+                        error_analyzer.record_error(
+                            sample_info=sample_info,
+                            predicted_answer=predicted[idx].item(),
+                            batch_idx=batch_idx
+                        )
+            
             if cfg.debug and batch_idx == 10:
                 break
 
@@ -454,13 +515,44 @@ def test(cfg: dict,
 
             modality_corr += corr
             modality_tot += tot
-            value = corr / tot * 100.
+            # 添加除零保护
+            value = (corr / tot * 100.) if tot > 0 else 0.0
 
             key = f'{modality}/{qst_type}'
             logger.info(f'Test {key:>24} accuracy: {value:.2f}({corr}/{tot})')
 
-        modality_acc = modality_corr / modality_tot * 100.
+        # 添加除零保护
+        modality_acc = (modality_corr / modality_tot * 100.) if modality_tot > 0 else 0.0
         logger.info(f'Test {modality:>24} accuracy: {modality_acc:.2f}({modality_corr}/{modality_tot})')
     key = 'Total avg'
     logger.info(f'Test {key:>24} accuracy: {acc:.2f}({correct}/{total})')
+
+    # 保存和打印错误分析结果
+    if error_analyzer is not None:
+        # 保存错误记录
+        error_analyzer.save_errors()
+        
+        # 获取并打印错误统计摘要
+        summary = error_analyzer.get_error_summary()
+        logger.info("=" * 60)
+        logger.info("ERROR ANALYSIS SUMMARY:")
+        logger.info(f"Total errors: {summary['total_errors']}")
+        
+        if summary['total_errors'] > 0:
+            logger.info("\nErrors by question type:")
+            for qtype, count in summary['error_by_type'].items():
+                logger.info(f"  {qtype}: {count} errors")
+            
+            logger.info("\nMost common wrong predictions:")
+            for pred_ans, count in list(summary['most_common_wrong_predictions'].items())[:5]:
+                logger.info(f"  '{pred_ans}': {count} times")
+            
+            logger.info("\nMost commonly missed answers:")
+            for true_ans, count in list(summary['most_common_missed_answers'].items())[:5]:
+                logger.info(f"  '{true_ans}': {count} times")
+        
+        # 保存统计摘要
+        error_analyzer.save_summary()
+        logger.info("=" * 60)
+
     return acc

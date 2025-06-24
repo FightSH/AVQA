@@ -143,6 +143,7 @@ class AVQA_dataset(Dataset):
             'video': video,
             'audio': audio,
             'name': name,
+            'question': question,
         }
         if patch is not None:
             data.update({'patch': patch})
