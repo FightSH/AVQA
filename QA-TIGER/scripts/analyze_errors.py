@@ -49,7 +49,11 @@ def analyze_error_patterns(errors: List[Dict]) -> Dict[str, Any]:
     analysis['errors_by_video'] = dict(video_errors.most_common(20))
 
     # 按视频和问题的详细错误分析
-    video_question_errors = defaultdict(lambda: defaultdict(lambda: {'count': 0, 'true_answers': set(), 'predicted_answers': set()}))
+    video_question_errors = defaultdict(lambda: defaultdict(lambda: {'count': 0, 'true_answers': set(), 'predicted_answers': set(), 'question_types': set()}))
+    
+    # 按问题类型的错误统计
+    question_type_errors = defaultdict(int)
+    
     for error in errors:
         video_name = error['video_name']
         question = error['question_content']
@@ -60,13 +64,17 @@ def analyze_error_patterns(errors: List[Dict]) -> Dict[str, Any]:
         qtype = error['question_type']
         if isinstance(qtype, list):
             qtype_str = f"{qtype[0]}/{qtype[1]}" if len(qtype) >= 2 else str(qtype)
+            # 统计每个单独的问题类型
+            for qt in qtype:
+                question_type_errors[qt] += 1
         else:
             qtype_str = str(qtype)
+            question_type_errors[qtype_str] += 1
         
         video_question_errors[video_name][question]['count'] += 1
         video_question_errors[video_name][question]['true_answers'].add(true_ans)
         video_question_errors[video_name][question]['predicted_answers'].add(pred_ans)
-        video_question_errors[video_name][question]['question_type'] = qtype_str
+        video_question_errors[video_name][question]['question_types'].add(qtype_str)
     
     # 转换为普通字典并处理集合为列表
     analysis['errors_by_video_details'] = {}
@@ -75,10 +83,13 @@ def analyze_error_patterns(errors: List[Dict]) -> Dict[str, Any]:
         for question, details in questions.items():
             analysis['errors_by_video_details'][video][question] = {
                 'count': details['count'],
-                'question_type': details['question_type'],
+                'question_types': list(details['question_types']),
                 'true_answers': list(details['true_answers']),
                 'predicted_answers': list(details['predicted_answers'])
             }
+    
+    # 添加问题类型错误统计
+    analysis['errors_by_question_type_detailed'] = dict(question_type_errors)
 
     return analysis
 
@@ -127,7 +138,7 @@ def create_visualizations(errors: List[Dict], output_dir: str):
 def generate_report(errors: List[Dict], analysis: Dict[str, Any], output_file: str):
     """生成分析报告"""
     report = []
-    report.append("# 错误分析报告\\n")
+    report.append("# 错误分析报告\n")
     
     report.append(f"## 总体统计")
     report.append(f"- 总错误数: {len(errors)}")
@@ -138,6 +149,15 @@ def generate_report(errors: List[Dict], analysis: Dict[str, Any], output_file: s
         percentage = count / len(errors) * 100
         report.append(f"- {qtype}: {count} ({percentage:.1f}%)")
     report.append("")
+    
+    # 添加详细问题类型错误统计
+    if 'errors_by_question_type_detailed' in analysis:
+        report.append("## 按单个问题类型错误统计")
+        sorted_type_errors = sorted(analysis['errors_by_question_type_detailed'].items(), key=lambda x: x[1], reverse=True)
+        for qtype, count in sorted_type_errors:
+            percentage = count / len(errors) * 100
+            report.append(f"- {qtype}: {count} ({percentage:.1f}%)")
+        report.append("")
     
     report.append("## 最常见错误模式 (真实答案 -> 预测答案)")
     for error_pair, count in analysis['common_error_pairs'][:10]:
@@ -155,13 +175,14 @@ def generate_report(errors: List[Dict], analysis: Dict[str, Any], output_file: s
         for question, details in questions.items():
             report.append(f"- **问题**: {question}")
             report.append(f"  - 错误次数: {details['count']}")
+            report.append(f"  - 问题类型: {', '.join(details['question_types'])}")
             report.append(f"  - 正确答案: {', '.join(details['true_answers'])}")
             report.append(f"  - 错误答案: {', '.join(details['predicted_answers'])}")
         report.append("")
     
     # 保存报告
     with open(output_file, 'w', encoding='utf-8') as f:
-        f.write('\\n'.join(report))
+        f.write('\n'.join(report))
     
     print(f"分析报告已保存到: {output_file}")
 
@@ -193,7 +214,7 @@ def main():
     parser.add_argument('--create_plots', action='store_true', help='是否生成可视化图表')
     
     args = parser.parse_args()
-    
+    args.error_file = '/mnt/sda/shenhao/code/AVQA/QA-TIGER/qa-tiger_clip_vitl14@336px/2025-06-25-00-31-43_seed713/test_errors.json' # 确保路径是绝对路径
     # 加载错误数据
     print(f"加载错误数据: {args.error_file}")
     errors = load_error_data(args.error_file)
@@ -205,8 +226,8 @@ def main():
     
     # 获取错误文件所在目录并创建analyze子目录作为输出目录
     error_file_path = Path(args.error_file)
-    output_dir = error_file_path.parent / "analyze"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = error_file_path.parent / "analyze"  # 修复变量名
+    output_path.mkdir(parents=True, exist_ok=True)
     
     # 生成报告
     report_file = output_path / 'error_analysis_report.md'
@@ -232,4 +253,4 @@ def main():
 if __name__ == '__main__':
     main()
 
-# python analyze_errors.py --error_file /mnt/sda/shenhao/code/AVQA/QA-TIGER/qa-tiger_clip_vitl14@336px/2025-06-24-17-16-40_seed713/test_errors.json
+# python analyze_errors.py --error_file /mnt/sda/shenhao/code/AVQA/QA-TIGER/qa-tiger_clip_vitl14@336px/2025-06-25-00-31-43_seed713/test_errors.json

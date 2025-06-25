@@ -1,2 +1,2 @@
 # !/bin/bash
-CUDA_VISIBLE_DEVICES=2 python train.py --mode 'train'
+CUDA_VISIBLE_DEVICES=1 python train.py --mode 'train'

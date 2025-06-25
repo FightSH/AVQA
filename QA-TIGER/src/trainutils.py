@@ -300,6 +300,7 @@ def train(cfg: dict,
                         sample_info = {
                             'question_type': [sample['type'][0][i], sample['type'][1][i]],
                             'question_content': sample.get('question', ['Unknown'])[i] if 'question' in sample else 'Unknown',
+                            'name': sample.get('name', ['Unknown'])[i] if 'name' in sample else 'Unknown',
                             'answer': target[i].item()
                         }
                         error_analyzer.record_error(
@@ -375,6 +376,7 @@ def evaluate(cfg: dict,
                         sample_info = {
                             'question_type': [qst_types[0][idx], qst_types[1][idx]],
                             'question_content': sample.get('question', ['Unknown'])[idx] if 'question' in sample else 'Unknown',
+                            'name': sample.get('name', ['Unknown'])[idx] if 'name' in sample else 'Unknown',
                             'answer': target[idx].item()
                         }
                         error_analyzer.record_error(
@@ -479,6 +481,7 @@ def test(cfg: dict,
                         sample_info = {
                             'question_type': [qst_types[0][idx], qst_types[1][idx]],
                             'question_content': sample.get('question', ['Unknown'])[idx] if 'question' in sample else 'Unknown',
+                            'name': sample.get('name', ['Unknown'])[idx] if 'name' in sample else 'Unknown',
                             'answer': target[idx].item()
                         }
                         error_analyzer.record_error(
@@ -532,27 +535,27 @@ def test(cfg: dict,
         # 保存错误记录
         error_analyzer.save_errors()
         
-        # 获取并打印错误统计摘要
-        summary = error_analyzer.get_error_summary()
-        logger.info("=" * 60)
-        logger.info("ERROR ANALYSIS SUMMARY:")
-        logger.info(f"Total errors: {summary['total_errors']}")
+        # # 获取并打印错误统计摘要
+        # summary = error_analyzer.get_error_summary()
+        # logger.info("=" * 60)
+        # logger.info("ERROR ANALYSIS SUMMARY:")
+        # logger.info(f"Total errors: {summary['total_errors']}")
         
-        if summary['total_errors'] > 0:
-            logger.info("\nErrors by question type:")
-            for qtype, count in summary['error_by_type'].items():
-                logger.info(f"  {qtype}: {count} errors")
+        # if summary['total_errors'] > 0:
+        #     logger.info("\nErrors by question type:")
+        #     for qtype, count in summary['error_by_type'].items():
+        #         logger.info(f"  {qtype}: {count} errors")
             
-            logger.info("\nMost common wrong predictions:")
-            for pred_ans, count in list(summary['most_common_wrong_predictions'].items())[:5]:
-                logger.info(f"  '{pred_ans}': {count} times")
+        #     logger.info("\nMost common wrong predictions:")
+        #     for pred_ans, count in list(summary['most_common_wrong_predictions'].items())[:5]:
+        #         logger.info(f"  '{pred_ans}': {count} times")
             
-            logger.info("\nMost commonly missed answers:")
-            for true_ans, count in list(summary['most_common_missed_answers'].items())[:5]:
-                logger.info(f"  '{true_ans}': {count} times")
+        #     logger.info("\nMost commonly missed answers:")
+        #     for true_ans, count in list(summary['most_common_missed_answers'].items())[:5]:
+        #         logger.info(f"  '{true_ans}': {count} times")
         
-        # 保存统计摘要
-        error_analyzer.save_summary()
-        logger.info("=" * 60)
+        # # 保存统计摘要
+        # error_analyzer.save_summary()
+        # logger.info("=" * 60)
 
     return acc
