@@ -1,21 +1,23 @@
-WANDB__SERVICE_WAIT=500 deepspeed --master_port 60000 train_pave_w_feat.py \
-    --deepspeed ./scripts/zero2.json \
+
+CUDA_VISIBLE_DEVICES=1 WANDB__SERVICE_WAIT=500  deepspeed --include=localhost:0 --master_port 60000 /mnt/sda/shenhao/code/AVQA/PAVE-main/train_pave_w_feat.py \
+    --deepspeed /mnt/sda/shenhao/code/AVQA/PAVE-main/scripts/zero2.json \
     --lora_enable True \
-    --annotation_path ./data/video_instruction_tuning/music_avqa/music_avqa_train_instruct_duplicate_audio.json \
-    --fast_path_mapping_path ./data/video_instruction_tuning/music_avqa/music_avqa_all_imagebind_feature_mapping.json \
-    --slow_path_mapping_path ./data/video_instruction_tuning/music_avqa/music_avqa_all_videos_mapping.json \
-    --data_root ./data/video_instruction_tuning/music_avqa \
-    --slow_path_data_root ./data/video_instruction_tuning/music_avqa \
+    --annotation_path /mnt/sda/shenhao/code/AVQA/PAVE-main/annots/music_avqa/music_avqa_train_instruct_duplicate_audio.json \
+    --fast_path_mapping_path /mnt/sda/shenhao/code/AVQA/PAVE-main/annots/music_avqa/music_avqa_all_imagebind_feature_mapping.json \
+    --slow_path_mapping_path /mnt/sda/shenhao/code/AVQA/PAVE-main/annots/music_avqa/music_avqa_all_videos_mapping.json \
+    --data_root /mnt/sda/shenhao/datasets/PAVE/audio_imagebind_feat \
+    --slow_path_data_root /mnt/sda/shenhao/datasets/MUSIC-AVQA \
     --use_fast_feat True \
     --use_slow True \
-    --model_name_or_path lmms-lab/llava-onevision-qwen2-7b-ov \
+    --cache_dir /mnt/sda/shenhao/cache/huggingface \
+    --model_name_or_path lmms-lab/llava-onevision-qwen2-0.5b-ov \
     --version conv_llava_ov_qwen \
-    --model_class VideoFeatModelArgumentsV5_1_3_audio_languagebind_7B_3layers \
-    --output_dir ./checkpoints/pave_v5_1_3_lora_music_avqa7B_2epoch_imagebind_3layers \
+    --model_class VideoFeatModelArgumentsV5_1_3_audio_languagebind_3layers \
+    --output_dir ./checkpoints/pave_v5_1_3_lora_music_avqa0.5B_2epoch_imagebind_3layers \
     --num_train_epochs 2 \
-    --per_device_train_batch_size 4 \
-    --per_device_eval_batch_size 4 \
-    --gradient_accumulation_steps 4 \
+    --per_device_train_batch_size 1 \
+    --per_device_eval_batch_size 1 \
+    --gradient_accumulation_steps 16 \
     --evaluation_strategy "no" \
     --save_strategy "steps" \
     --save_steps 2000 \
@@ -27,9 +29,9 @@ WANDB__SERVICE_WAIT=500 deepspeed --master_port 60000 train_pave_w_feat.py \
     --logging_steps 1 \
     --model_max_length 2048 \
     --gradient_checkpointing True \
-    --dataloader_num_workers 8 \
+    --dataloader_num_workers 2 \
     --lazy_preprocess True \
-    --report_to wandb \
+    --report_to none \
     --bf16 True \
     --tf32 True \
     --mm_newline_position grid \
