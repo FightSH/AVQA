@@ -131,190 +131,345 @@ class VideoCrossAttentionWith3DRope(nn.Module):
         # attn_mask: is list of the number which indicate the length of the  or value
         # rope: rotary positional embedding
         
-        # ipdb.set_trace()
+        print("\n=== VideoCrossAttentionWith3DRope Forward 开始 ===")
+        
+        # 解析输入维度
         Bq, T_q, S_q, C = q.shape
         Bk, T_k, S_k, C_cond = v.shape
         Bv, T_k, S_k, C_cond = k.shape
-        assert Bq == Bk == Bv == 1 # for current version, we only support bs = 1
         
+        print(f"输入维度统计:")
+        print(f"  - 查询q: {q.shape} (B={Bq}, T_q={T_q}, S_q={S_q}, C={C})")
+        print(f"  - 键k: {k.shape} (B={Bk}, T_k={T_k}, S_k={S_k}, C_cond={C_cond})")
+        print(f"  - 值v: {v.shape} (B={Bv}, T_k={T_k}, S_k={S_k}, C_cond={C_cond})")
+        print(f"  - rope_axis: {rope_axis}")
+        print(f"  - attn_mask: {attn_mask}")
+        
+        assert Bq == Bk == Bv == 1, "当前版本只支持batch_size=1" # for current version, we only support bs = 1
+        print(f"  - 验证通过：批次大小均为1")
+        
+        print(f"\n第一步：线性变换和维度重排")
+        # 线性变换和维度重排
+        print(f"  对查询q进行线性变换:")
+        print(f"    变换前: {q.shape}")
         q = self.q_linear(q).view(Bq, T_q*S_q, self.num_heads, self.head_dim).transpose(1, 2) # (B, H_num, T_q*S_q, H_dim)
+        print(f"    变换后: {q.shape} (B, num_heads={self.num_heads}, T_q*S_q={T_q*S_q}, head_dim={self.head_dim})")
         
+        print(f"  对键k进行线性变换:")
+        print(f"    变换前: {k.shape}")
         k = self.k_linear(k).view(Bk, T_k*S_k, self.num_heads, self.head_dim).transpose(1, 2) # (B, H_num, T_k*S_k, H_dim)
-        v = self.k_linear(v).view(Bk, T_k*S_k, self.num_heads, self.head_dim).transpose(1, 2) # (B, H_num, T_k*S_k, H_dim)
+        print(f"    变换后: {k.shape} (B, num_heads={self.num_heads}, T_k*S_k={T_k*S_k}, head_dim={self.head_dim})")
+        
+        print(f"  对值v进行线性变换:")
+        print(f"    变换前: {v.shape}")
+        v = self.v_linear(v).view(Bv, T_k*S_k, self.num_heads, self.head_dim).transpose(1, 2) # (B, H_num, T_k*S_k, H_dim)
+        print(f"    变换后: {v.shape} (B, num_heads={self.num_heads}, T_k*S_k={T_k*S_k}, head_dim={self.head_dim})")
         
         # add the rotary pos embedding
-        
+        print(f"\n第二步：旋转位置编码(RoPE)处理")
         if rope is not None: # expect in the format of # (batch, heads, seq len, dimension of head)
+            print(f"  检测到RoPE，开始应用3D旋转位置编码")
             # compute the max size 
             T_max = max(T_q, T_k)
-            assert int(math.sqrt(S_q)) ** 2 == S_q # In here we assume we alway use the square
-            assert int(math.sqrt(S_k)) ** 2 == S_k # In here we assume we alway use the square
-            # assert S_q >= S_k
+            print(f"  最大时间维度: T_max = max({T_q}, {T_k}) = {T_max}")
+            
+            assert int(math.sqrt(S_q)) ** 2 == S_q, "假设查询的空间维度为正方形" # In here we assume we alway use the square
+            assert int(math.sqrt(S_k)) ** 2 == S_k, "假设键值的空间维度为正方形" # In here we assume we alway use the square
+            
             H_max = int(math.sqrt(max(S_q, S_k)))
             W_max = H_max
+            print(f"  最大空间维度: H_max = W_max = sqrt(max({S_q}, {S_k})) = {H_max}")
+            
             # create the poe
+            print(f"  生成RoPE的cos和sin值，序列长度: {max(T_max, H_max, W_max)}")
             cos, sin = rope(q, seq_len=max(T_max, H_max, W_max))
+            print(f"  RoPE cos形状: {cos.shape}, sin形状: {sin.shape}")
             
             # create a large cube for each dimension
+            print(f"  创建3D索引立方体: ({T_max}, {H_max}, {W_max}, 3)")
             idx_cube = create_idx_cube(T_max, H_max, W_max).to(q.device) #  (T_max, H_max, W_max, 3) cube
+            print(f"  索引立方体形状: {idx_cube.shape}")
             
             # select the index for slow (the query)
+            print(f"  为查询(慢速特征)选择索引:")
             # determine the temporal idx of the slow frames
             temporal_idx = np.linspace(0, T_max-1, T_q, dtype=int).tolist()
+            print(f"    时间索引: {temporal_idx} (从{T_max-1}中选择{T_q}个)")
             # directly select from the cube along the temporal axis
             slow_frames_idx = idx_cube[temporal_idx]  # T_q, h_q, w_q, 3
+            print(f"    慢速帧索引形状: {slow_frames_idx.shape}")
+            
             if S_q < S_k:
+                print(f"    查询空间维度({S_q}) < 键值空间维度({S_k})，需要下采样索引")
                 H_q = int(math.sqrt(S_q))
                 target_split = 2*H_q+1
                 H_fast_index = np.linspace(0, H_max, target_split, dtype=int).tolist()
                 H_fast_index = H_fast_index[1:-1]
                 H_fast_index = H_fast_index[::2]     
                 W_fast_index = H_fast_index   # TODO: we are assume the input shape of is squre
+                print(f"    下采样后的H/W索引: {H_fast_index}")
                 slow_frames_idx = slow_frames_idx[:, H_fast_index][:,:, W_fast_index] # T_k, h_k, w_k, 3 
-            # ipdb.set_trace() # check the slow frame idx
+                print(f"    下采样后慢速帧索引形状: {slow_frames_idx.shape}")
             
             # determine the spatial idx of the fast frames (the key)
+            print(f"  为键值(快速特征)选择索引:")
             H_k = int(math.sqrt(S_k))
             target_split = 2*H_k+1
             H_fast_index = np.linspace(0, H_max, target_split, dtype=int).tolist()
             H_fast_index = H_fast_index[1:-1]
             H_fast_index = H_fast_index[::2]     
             W_fast_index = H_fast_index   # TODO: we are assume the input shape of is squre
+            print(f"    快速帧H/W索引: {H_fast_index}")
             # directly select from the cube along the temporal axis
             fast_frames_idx = idx_cube[:, H_fast_index][:,:, W_fast_index] # T_k, h_k, w_k, 3
+            print(f"    快速帧索引形状: {fast_frames_idx.shape}")
             
             # flatten the dimension to 1d (3, B, len)
+            print(f"  展平索引维度:")
+            print(f"    快速帧索引展平前: {fast_frames_idx.shape}")
             fast_frames_idx = fast_frames_idx.view(-1, 3).permute([1, 0]).unsqueeze(dim=1) # which is the key
-            slow_frames_idx = slow_frames_idx.view(-1, 3).permute([1, 0]).unsqueeze(dim=1) # which is the query
+            print(f"    快速帧索引展平后: {fast_frames_idx.shape}")
             
-            # ipdb.set_trace() # check the fast frame idx
+            print(f"    慢速帧索引展平前: {slow_frames_idx.shape}")
+            slow_frames_idx = slow_frames_idx.view(-1, 3).permute([1, 0]).unsqueeze(dim=1) # which is the query
+            print(f"    慢速帧索引展平后: {slow_frames_idx.shape}")
+            
             # apply it to q
+            print(f"  对查询q应用RoPE:")
+            print(f"    应用前q形状: {q.shape}")
+            print(f"    mrope_section: {self.rope_scaling['mrope_section']}")
             q = apply_multimodal_rotary_pos_emb(
                 q,  # torch.Size([1, 4, 6272, 128]) (B, Head_num, sequence length, head_dim)
                 cos, sin, 
                 slow_frames_idx,  # torch.Size([3, 1, 6272]) #
                 self.rope_scaling["mrope_section"] # [16, 24, 24]
             )
+            print(f"    应用后q形状: {q.shape}")
+            
             # apply it to k
+            print(f"  对键k应用RoPE:")
+            print(f"    应用前k形状: {k.shape}")
             k = apply_multimodal_rotary_pos_emb(
                 k,  # torch.Size([1, 28, 32144, 128]) (B, Head_num, sequence length, head_dim)
                 cos, sin, 
                 fast_frames_idx,  # torch.Size([3, 1, 32144]) #
                 self.rope_scaling["mrope_section"] # [16, 24, 24]
             )
+            print(f"    应用后k形状: {k.shape}")
+        else:
+            print(f"  无RoPE，跳过旋转位置编码")
         
+        print(f"\n第三步：维度重排和填充处理")
         # if do not need to do the padding
-        # ipdb.set_trace() # check the audio reshaping
         if T_k % T_q == 0:
+            print(f"  时间维度对齐 (T_k={T_k} % T_q={T_q} == 0)，无需填充")
             # reshape 
+            print(f"  重排查询q维度:")
+            print(f"    重排前: {q.shape}")
             q = rearrange(q, 'B H (T S) D -> (B T) H S D', T=T_q)
+            print(f"    重排后: {q.shape}")
+            
+            print(f"  重排键k维度:")
+            print(f"    第一次重排前: {k.shape}")
             k = rearrange(k, 'B H (T S) D -> B H T S D', T=T_k)
+            print(f"    第一次重排后: {k.shape}")
             k = rearrange(k, 'B H (n T) S D -> (B n) H (T S) D', n=T_q)
+            print(f"    第二次重排后: {k.shape}")
+            
+            print(f"  重排值v维度:")
+            print(f"    第一次重排前: {v.shape}")
             v = rearrange(v, 'B H (T S) D -> B H T S D', T=T_k)
+            print(f"    第一次重排后: {v.shape}")
             v = rearrange(v, 'B H (n T) S D -> (B n) H (T S) D', n=T_q)            
+            print(f"    第二次重排后: {v.shape}")
+            
             # additional param for mask
             attn_mask = None
-            # T = max_len_of_all_chunks
-            # q_len = S_q
+            print(f"  设置attention_mask为None（无需掩码）")
             
         else: # do the padding for the key if need, and convert it back to batch
+            print(f"  时间维度不对齐 (T_k={T_k} % T_q={T_q} != 0)，需要填充处理")
+            
+            print(f"  重排查询q维度:")
+            print(f"    重排前: {q.shape}")
             q = rearrange(q, 'B H (T S) D -> (B T) H S D', T=T_q)
+            print(f"    重排后: {q.shape}")
+            
+            print(f"  重排键值k,v维度:")
+            print(f"    k重排前: {k.shape}")
             k = rearrange(k, 'B H (T S) D -> B H T S D', T=T_k)  
+            print(f"    k重排后: {k.shape}")
+            print(f"    v重排前: {v.shape}")
             v = rearrange(v, 'B H (T S) D -> B H T S D', T=T_k)  
+            print(f"    v重排后: {v.shape}")
             
             # find the cutting point 
+            print(f"  计算视频特征分割点:")
             video_feat_split_sizes = split_list_lengths(T_k, T_q)
+            print(f"    分割大小: {video_feat_split_sizes} (总长度{T_k}分成{T_q}段)")
+            
             # split the video into multiple chunks
+            print(f"  分割键值张量:")
             splited_k = torch.split(k, video_feat_split_sizes, dim=2) # (B, Head_num, T, S, head_dim)
             splited_v = torch.split(v, video_feat_split_sizes, dim=2) # (B, Head_num, T, S, head_dim)
+            print(f"    分割后k段数: {len(splited_k)}, 各段形状: {[chunk.shape for chunk in splited_k]}")
+            print(f"    分割后v段数: {len(splited_v)}, 各段形状: {[chunk.shape for chunk in splited_v]}")
             
-            # (T, H/2, W/2, C*4) -> (32, T/32, H/2, W/2, C*4)
-            # ipdb.set_trace() # check the split, check the padding, 
+            # 计算填充参数
             _, H_num, _, S, C = splited_k[0].shape
             num_of_chunks = len(video_feat_split_sizes)
             max_len_of_all_chunks = max(video_feat_split_sizes)
+            print(f"  填充参数:")
+            print(f"    H_num: {H_num}, S: {S}, C: {C}")
+            print(f"    块数: {num_of_chunks}, 最大块长度: {max_len_of_all_chunks}")
             
+            print(f"  创建填充张量:")
             k_padded_chunks = torch.zeros(num_of_chunks, H_num, max_len_of_all_chunks, S, C).to(q.device, dtype=q.dtype) # B, H, Max_len, S, C
             v_padded_chunks = torch.zeros(num_of_chunks, H_num, max_len_of_all_chunks, S, C).to(q.device, dtype=q.dtype) # B, H, Max_len, S, C
+            print(f"    k填充张量形状: {k_padded_chunks.shape}")
+            print(f"    v填充张量形状: {v_padded_chunks.shape}")
+            
+            print(f"  填充各个块:")
             for i, (len_of_chunk, curr_k, curr_v) in enumerate(zip(video_feat_split_sizes, splited_k, splited_v)):
+                print(f"    块{i}: 长度{len_of_chunk}, 填充到位置[{i}, :, :{len_of_chunk}]")
                 k_padded_chunks[i, :, :len_of_chunk] = curr_k 
                 v_padded_chunks[i, :, :len_of_chunk] = curr_v
+            
+            print(f"  重排填充后的张量:")
+            print(f"    k重排前: {k_padded_chunks.shape}")
             k_padded_chunks = rearrange(k_padded_chunks, "B H L S C -> B H (L S) C")  # flatten the spatial with the chunk len
+            print(f"    k重排后: {k_padded_chunks.shape}")
+            print(f"    v重排前: {v_padded_chunks.shape}")
             v_padded_chunks = rearrange(v_padded_chunks, "B H L S C -> B H (L S) C")  # flatten the spatial with the chunk len
+            print(f"    v重排后: {v_padded_chunks.shape}")
             
             k = k_padded_chunks
             v = v_padded_chunks
-            # ipdb.set_trace() # check the split, check the padding, 
+            
             # additional param for mask
             attn_mask = torch.tensor(video_feat_split_sizes).to(k_padded_chunks.device)
             T = max_len_of_all_chunks
-            # q_len = S_q
+            print(f"  设置attention_mask: {attn_mask}")
+            print(f"  设置T = {T}")
 
-        # The needed input shape to the dot-attn is 
-        # q: (B, H_num, S_q, H_dim)
-        # k: (B, H_num, (t*s), H_dim)
-        # v: (B, H_num, (t*s), H_dim)
+        print(f"\n第四步：注意力计算")
+        print(f"注意力计算输入维度:")
+        print(f"  - q: {q.shape}")
+        print(f"  - k: {k.shape}")
+        print(f"  - v: {v.shape}")
+        print(f"  - attn_mask: {attn_mask}")
+        print(f"  - training模式: {self.training}")
+        print(f"  - flash_attn可用: {flash_attn_varlen_func is not None}")
 
-        # ipdb.set_trace() # test the video cross-attn
         if not self.training or flash_attn_varlen_func is None: # if no flash attention
+            print(f"  使用PyTorch原生注意力计算")
             if attn_mask is not None:
-                assert len(attn_mask.shape) == 1 # the input is the len
-                assert T == max(attn_mask)
+                print(f"  处理注意力掩码:")
+                assert len(attn_mask.shape) == 1, "输入应为长度列表" # the input is the len
+                assert T == max(attn_mask), f"最大时间长度应与T一致: {T} vs {max(attn_mask)}"
+                print(f"    原始mask: {attn_mask}")
+                
                 # update the mask with the spatial (deep copy)
                 spatial_attn_mask = attn_mask.clone().to(q.device)
                 spatial_attn_mask *= S # multiply with the spatial dimension
+                print(f"    乘以空间维度后: {spatial_attn_mask}")
+                
                 max_len = max(spatial_attn_mask)
-                # spatial_attn_mask = torch.tensor(spatial_attn_mask)
-                #ipdb.set_trace()
+                print(f"    最大长度: {max_len}")
+                
                 spatial_attn_mask = torch.arange(max_len).expand(len(spatial_attn_mask), max_len).to(q.device) < spatial_attn_mask.unsqueeze(1) # (B, k_l)
+                print(f"    生成二进制mask形状: {spatial_attn_mask.shape}")
+                
                 spatial_attn_mask = spatial_attn_mask.unsqueeze(dim=1).unsqueeze(dim=1)
                 spatial_attn_mask = spatial_attn_mask.repeat(1, 1, S_q, 1) # (B, 1, q_l, k_l)
-                #ipdb.set_trace()
+                print(f"    扩展后mask形状: {spatial_attn_mask.shape}")
             else:
                 spatial_attn_mask = None
+                print(f"    无注意力掩码")
             
+            print(f"  执行scaled_dot_product_attention")
             # https://pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html
             x = F.scaled_dot_product_attention(q, k, v, attn_mask=spatial_attn_mask, dropout_p=self.attn_drop)
-            # x = x.transpose(1, 2)
-            # x = x.reshape(B, -1, C)
+            print(f"  注意力计算结果形状: {x.shape}")
+            
+            print(f"  重排输出维度:")
             x = rearrange(x, 'b h s d -> b s (h d)')
+            print(f"  最终输出形状: {x.shape}")
+            
         else: # use flash attention           
+            print(f"  使用Flash Attention计算")
             if attn_mask is not None: 
-                assert len(attn_mask.shape) == 1 # the input is the len
-                assert T == max(attn_mask)                
+                print(f"  处理Flash Attention的掩码:")
+                assert len(attn_mask.shape) == 1, "输入应为长度列表" # the input is the len
+                assert T == max(attn_mask), f"最大时间长度应与T一致: {T} vs {max(attn_mask)}"                
+                print(f"    原始mask: {attn_mask}")
+                
                 # update the mask with the spatial (deep copy)
                 spatial_attn_mask = attn_mask.clone()
                 spatial_attn_mask *= S # multiply with the spatial dimension
+                print(f"    乘以空间维度后: {spatial_attn_mask}")
 
                 # caclulate len of the mask
                 k_max_len = max(spatial_attn_mask)
+                print(f"    键的最大长度: {k_max_len}")
+                
                 # create the mask
                 kv_padding_mask = torch.tensor([[True]*curr_seq_len + [False]*(k_max_len-curr_seq_len) for curr_seq_len in spatial_attn_mask]).to(k.device)
+                print(f"    生成填充掩码形状: {kv_padding_mask.shape}")
+                
                 # handle the k and v
-                # ipdb.set_trace()
-                # here is minor update for compatible with the flash-attn-2.7.3
-                k_unpad, indices_k, cu_seqlens_k, max_seqlen_k,_ = unpad_input(k.transpose(1, 2), kv_padding_mask) # k: (batch_size, seqlen_k, nheads, d)
-                v_unpad, indices_v, cu_seqlens_v, max_seqlen_v,_ = unpad_input(v.transpose(1, 2), kv_padding_mask) # v: (batch_size, seqlen_v, nheads, d)
+                print(f"  处理键值张量:")
+                print(f"    k转置前: {k.shape}")
+                k_transposed = k.transpose(1, 2)
+                print(f"    k转置后: {k_transposed.shape}")
+                k_unpad, indices_k, cu_seqlens_k, max_seqlen_k, _ = unpad_input(k_transposed, kv_padding_mask) # k: (batch_size, seqlen_k, nheads, d)
+                print(f"    k unpad后: {k_unpad.shape}")
+                
+                print(f"    v转置前: {v.shape}")
+                v_transposed = v.transpose(1, 2)
+                print(f"    v转置后: {v_transposed.shape}")
+                v_unpad, indices_v, cu_seqlens_v, max_seqlen_v, _ = unpad_input(v_transposed, kv_padding_mask) # v: (batch_size, seqlen_v, nheads, d)
+                print(f"    v unpad后: {v_unpad.shape}")
+                
                 # handle the q (B, H_num, q_len, H_dim)
+                print(f"  处理查询张量:")
                 cu_seqlens_q = torch.tensor([S_q * i for i in range(k.shape[0]+1)]).to(k.device, dtype=torch.int32)
                 max_seqlen_q = S_q
                 q_unpad = rearrange(q, 'b h s d -> (b s) h d')
+                print(f"    q unpad后: {q_unpad.shape}")
+                print(f"    cu_seqlens_q: {cu_seqlens_q}")
+                print(f"    max_seqlen_q: {max_seqlen_q}")
             else: # if attn mask is None, then do full cross-attn
+                print(f"  无掩码的Flash Attention:")
                 q_unpad = rearrange(q, 'b h s d -> (b s) h d')
                 k_unpad = rearrange(k, 'b h s d -> (b s) h d')
                 v_unpad = rearrange(v, 'b h s d -> (b s) h d')
-                # ipdb.set_trace()
+                print(f"    q_unpad: {q_unpad.shape}")
+                print(f"    k_unpad: {k_unpad.shape}")
+                print(f"    v_unpad: {v_unpad.shape}")
+                
                 cu_seqlens_q = torch.tensor([q.shape[2] * i for i in range(k.shape[0]+1)]).to(k.device, dtype=torch.int32)
                 cu_seqlens_k = torch.tensor([k.shape[2] * i for i in range(k.shape[0]+1)]).to(k.device, dtype=torch.int32) # handles for the sptial dimenstion
                 max_seqlen_q = q.shape[2]
                 max_seqlen_k = k.shape[2] # handles for the sptial dimenstion
+                print(f"    cu_seqlens_q: {cu_seqlens_q}")
+                print(f"    cu_seqlens_k: {cu_seqlens_k}")
+                print(f"    max_seqlen_q: {max_seqlen_q}")
+                print(f"    max_seqlen_k: {max_seqlen_k}")
             
+            print(f"  执行flash_attn_varlen_func")
             x = flash_attn_varlen_func(q_unpad, k_unpad, v_unpad, 
                                        cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k,
                                        softmax_scale=None, causal=False,
                                        return_attn_probs=False)
+            print(f"  Flash Attention结果形状: {x.shape}")
+            
+            print(f"  重排Flash Attention输出:")
             x = rearrange(x, '(t s) h d -> t s (h d)', t=T_q).unsqueeze(dim=0) # (B, T_q, S_q, C) should be the query tokens
-        # ipdb.set_trace() # save the result
+            print(f"  最终输出形状: {x.shape}")
+        
+        print(f"\n=== VideoCrossAttentionWith3DRope Forward 完成 ===")
+        print(f"最终返回形状: {x.shape}")
         return x    
 
 
@@ -420,29 +575,27 @@ class DecoderVideoCrossAttention(nn.Module):
                 kv_padding_mask = torch.tensor([[True]*curr_seq_len + [False]*(k_max_len-curr_seq_len) for curr_seq_len in spatial_attn_mask]).to(k.device)
                 
                 # 对键和值进行去填充处理（移除无效位置）
-                k_unpad, indices_k, cu_seqlens_k, max_seqlen_k = unpad_input(k.transpose(1, 2), kv_padding_mask)  # 键形状: (批次, 序列长度, 头数, 维度)
-                v_unpad, indices_v, cu_seqlens_v, max_seqlen_v = unpad_input(v.transpose(1, 2), kv_padding_mask)  # 值形状: (批次, 序列长度, 头数, 维度)
+                k_unpad, indices_k, cu_seqlens_k, max_seqlen_k = unpad_input(k.transpose(1, 2), kv_padding_mask) # k: (batch_size, seqlen_k, nheads, d)
+                v_unpad, indices_v, cu_seqlens_v, max_seqlen_v = unpad_input(v.transpose(1, 2), kv_padding_mask) # v: (batch_size, seqlen_v, nheads, d)
                 
                 # 处理查询张量维度
                 cu_seqlens_q = torch.tensor([q_len * i for i in range(B+1)]).to(k.device, dtype=torch.int32)
                 max_seqlen_q = q_len
                 q_unpad = rearrange(q, 'b h s d -> (b s) h d')
             else:  # 无注意力掩码时进行全交叉注意力计算
-                # 调整张量维度以适配flash attention
                 q_unpad = rearrange(q, 'b h s d -> (b s) h d')
                 k_unpad = rearrange(k, 'b h s d -> (b s) h d')
                 v_unpad = rearrange(v, 'b h s d -> (b s) h d')
                 cu_seqlens_q = torch.tensor([q_len * i for i in range(B+1)])
-                cu_seqlens_k = torch.tensor([(T*S) * i for i in range(B+1)])  # 处理时空维度
+                cu_seqlens_k = torch.tensor([t_len * i for i in range(B+1)])
                 max_seqlen_q = q_len
-                max_seqlen_k = (T*S)  # 处理时空维度
+                max_seqlen_k = t_len
             
             # 使用flash attention计算注意力
             x = flash_attn_varlen_func(q_unpad, k_unpad, v_unpad, 
                                        cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k,
                                        softmax_scale=None, causal=False,
                                        return_attn_probs=False)
-            # 恢复输出维度
             x = rearrange(x, '(b s) h d -> b s (h d)', b=B)
         # 返回注意力计算结果
         return x
@@ -888,8 +1041,8 @@ class ResBlock(nn.Module):
                 ResNeXt like networks.
             stride_1x1 (bool): if True, apply stride to 1x1 conv, otherwise
                 apply stride to the 3x3 conv.
-            inplace_relu (bool): calculate the relu on the original input
-                without allocating new memory.
+            inplace_relu (bool): if True, calculate the relu on the original
+                input without allocating new memory.
             eps (float): epsilon for batch norm.
             bn_mmt (float): momentum for batch norm. Noted that BN momentum in
                 PyTorch = 1 - BN momentum in Caffe2.

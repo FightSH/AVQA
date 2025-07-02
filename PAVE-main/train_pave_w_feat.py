@@ -1,9 +1,5 @@
 # Adopted from https://github.com/haotian-liu/LLaVA. The training entrance.
 import os
-os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
-os.environ['WANDB_MODE'] = 'disabled'  # 禁用wandb日志和交互
-os.environ['WANDB_DISABLED'] = 'true'  # 兼容性设置，彻底关闭wandb
-
 import pathlib
 import torch
 import ipdb
@@ -28,7 +24,7 @@ def train_pave_func(attn_implementation=None):
     # print('Using compute dtype:', compute_dtype)
     # print("Training arguments:", training_args)
     # print("Model arguments:", model_args)
-    # print("Data arguments:", data_args)
+    print("Data arguments:", data_args)
     
     # prepare the model
     model, tokenizer = prepare_video_model(training_args, model_args, data_args, compute_dtype, attn_implementation)

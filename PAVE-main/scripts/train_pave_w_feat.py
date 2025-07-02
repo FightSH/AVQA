@@ -1,17 +1,35 @@
-# This script holds all the functions for loading the model for training and testing.
-
-import warnings
-import shutil
+# Adopted from https://github.com/haotian-liu/LLaVA. The training entrance.
 import os
-import ipdb
-import logging
+os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
+os.environ['WANDB_MODE'] = 'disabled'  # 禁用wandb日志和交互
+os.environ['WANDB_DISABLED'] = 'true'  # 兼容性设置，彻底关闭wandb
 
+# 强制设置GPU环境变量
+if 'CUDA_VISIBLE_DEVICES' not in os.environ:
+    os.environ['CUDA_VISIBLE_DEVICES'] = '2'
+print(f"CUDA_VISIBLE_DEVICES 设置为: {os.environ.get('CUDA_VISIBLE_DEVICES', 'Not Set')}")
+
+import pathlib
 import torch
-import transformers
-from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig, BitsAndBytesConfig
+import ipdb
+import sys
 
-from libs.utils.train_utils import find_all_linear_names, rank0_print
-from libs.dataset.image_dataset import preprocess_multimodal, preprocess, smart_tokenizer_and_embedding_resize
+# 验证GPU设置
+print(f"PyTorch可见GPU数量: {torch.cuda.device_count()}")
+if torch.cuda.is_available():
+    print(f"当前GPU设备: {torch.cuda.current_device()}")
+    for i in range(torch.cuda.device_count()):
+        print(f"GPU {i}: {torch.cuda.get_device_name(i)}")
+else:
+    print("CUDA不可用")
+
+from libs.utils.train_utils import rank0_print
+
+from .multimodal_encoder.builder import build_temporal_aggregator, build_video_tower, build_vision_tower
+from .multimodal_projector.builder import build_vision_projector
+
+from libs.constants import IGNORE_INDEX, IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_PATCH_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
+from libs.mm_utils import get_anyres_image_grid_shape, split_list_lengths
 from libs.model import *
 from libs import conversation_lib as conversation_lib
 from libs.constants import DEFAULT_IMAGE_PATCH_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN, DEFAULT_IMAGE_TOKEN, DEFAULT_VIDEO_TOKEN
@@ -163,11 +181,13 @@ def prepare_video_model(training_args, model_args, data_args, compute_dtype, att
     # usually we do not need this 
     model.initialize_vision_tokenizer(model_args, tokenizer=tokenizer)
     if use_hyper_attention:
-        print("将tokenizer传递给模型")
-        model.tokenizer = tokenizer
+        print("hyper_attention模式：过滤cross-attn模块的LoRA参数")
+        selected_module = [ele for ele in selected_module if 'self_attn.v_kv_proj' not in ele and 'self_attn.gate_proj' not in ele]
     else:
-        print("不使用hyper_attention，不传递tokenizer")
-
+        print("普通模式：不过滤cross-attn模块")
+    
+    print('following layer add lora params: ', selected_module)
+    
     # lora setting and init the lora
     if training_args.lora_enable:
         print("启用LoRA训练")
@@ -250,7 +270,7 @@ def prepare_video_model(training_args, model_args, data_args, compute_dtype, att
                 model_args=model_args,
                 fsdp=training_args.fsdp
             )
-            # ipdb.set_trace()
+            # ipdb.set_trace() # check the loading of the model
             # convert the video tower to a specified data type
             video_tower = model.get_video_tower()
             # ipdb.set_trace() # check the loading of the model
@@ -463,6 +483,10 @@ def load_trained_model_for_eval(model_path, model_base, model_name,
                     if not hasattr(cfg_pretrained, key):
                         setattr(cfg_pretrained, key, default_model_arg.__dict__[key])
             
+            # for key in lora_cfg_pretrained.__dict__:
+            #     if not key.startswith('__'):
+            #         print(key)
+            
             # re-instantiate the Video backbone and the SSM
             cfg_pretrained.image_size = default_data_args.image_size
             model.get_model().initialize_vision_modules(
@@ -515,4 +539,3 @@ def load_trained_model_for_eval(model_path, model_base, model_name,
     
     # ipdb.set_trace()
     return tokenizer, model, image_processor, context_len
-

@@ -166,6 +166,22 @@ class PAVEModuleV5(nn.Module):
         
     ):
         super().__init__()
+        print("=== PAVEModuleV5 初始化开始 ===")
+        print(f"构造参数:")
+        print(f"  - input_dim: {input_dim}")
+        print(f"  - output_dim: {output_dim}")
+        print(f"  - embed_dim: {embed_dim}")
+        print(f"  - fast_input_mapping_type: {fast_input_mapping_type}")
+        print(f"  - number_of_input_mapping_layer: {number_of_input_mapping_layer}")
+        print(f"  - number_of_block_each_layer: {number_of_block_each_layer}")
+        print(f"  - query_type: {query_type}")
+        print(f"  - chunks_number: {chunks_number}")
+        print(f"  - number_of_query: {number_of_query}")
+        print(f"  - cross_attn_hidden_dim: {cross_attn_hidden_dim}")
+        print(f"  - num_cross_attn_head: {num_cross_attn_head}")
+        print(f"  - use_3d_rope: {use_3d_rope}")
+        print(f"  - use_output_mlp: {use_output_mlp}")
+        
         # 超参数设置
         self.input_dim = input_dim
         self.output_dim = output_dim
@@ -173,12 +189,15 @@ class PAVEModuleV5(nn.Module):
         self.act = nn.SiLU(inplace=True)  # Swish激活函数
         self.use_slow_feat_before_mlp = use_slow_feat_before_mlp
         
+        print("\n第一步：构建快速输入映射网络")
         # 快速输入映射配置
         self.fast_input_mapping_type = fast_input_mapping_type
         if self.fast_input_mapping_type == 'conv':
+            print("  使用卷积网络进行快速输入映射")
             # 初始化卷积层（将空间维度下采样2x2，将维度从4增加到16）
             self.input_mapping = nn.ModuleList()
             self.embed_dim = embed_dim if embed_dim is not None else input_dim * 4
+            print(f"  设置embed_dim: {self.embed_dim}")
             curr_dim = input_dim
             
             # 构建多层输入映射网络
@@ -187,8 +206,15 @@ class PAVEModuleV5(nn.Module):
                 curr_dim_scaling = dim_scaling[i]
                 curr_stage_block_num = number_of_block_each_layer[i]
                 
+                print(f"  构建第{i}层:")
+                print(f"    - 当前维度: {curr_dim}")
+                print(f"    - 空间步长: {curr_spatial_stride}")
+                print(f"    - 维度缩放: {curr_dim_scaling}")
+                print(f"    - 块数量: {curr_stage_block_num}")
+                
                 if i == 0:
                     # 第一层：基础stem层
+                    print(f"    - 添加ResNetBasicStem: {curr_dim} -> {self.embed_dim}")
                     self.input_mapping.append(
                         ResNetBasicStem(curr_dim,
                                         self.embed_dim,
@@ -202,9 +228,11 @@ class PAVEModuleV5(nn.Module):
                     curr_dim = self.embed_dim
                 else:
                     # 后续层：ResNet阶段
+                    new_dim = curr_dim * curr_dim_scaling
+                    print(f"    - 添加ResStage: {curr_dim} -> {new_dim}")
                     self.input_mapping.append(
                         ResStage(dim_in=curr_dim,
-                                    dim_out=curr_dim * curr_dim_scaling,
+                                    dim_out=new_dim,
                                     stride=curr_spatial_stride,
                                     temp_kernel_size=3,      # 时间卷积核大小
                                     num_blocks=curr_stage_block_num,
@@ -216,18 +244,23 @@ class PAVEModuleV5(nn.Module):
                                     norm_module=LayerNorm3d,
                                     )
                     )
-                    curr_dim *= curr_dim_scaling    
+                    curr_dim = new_dim
+                    
             input_mapping_out_channels = curr_dim
+            print(f"  卷积网络最终输出维度: {input_mapping_out_channels}")
             
         elif self.fast_input_mapping_type == 'linear':
+            print("  使用线性层进行快速输入映射")
             # 线性映射（用于LanguageBind等特征）
             assert embed_dim is not None
             self.embed_dim = embed_dim
+            print(f"  线性映射: {self.input_dim} -> {self.embed_dim}")
             self.input_mapping = nn.Linear(self.input_dim, self.embed_dim)
             input_mapping_out_channels = self.embed_dim
         else:
             raise NotImplementedError
         
+        print("\n第二步：构建查询配置")
         # 查询配置
         self.use_slow_as_query = True
         self.query_input_dim = query_input_dim
@@ -236,26 +269,42 @@ class PAVEModuleV5(nn.Module):
         # 定义查询的输入映射
         self.query_type = query_type
         if self.query_type == 'slow_feat':
+            print(f"  使用慢速特征作为查询")
+            print(f"  查询输入映射: {self.query_input_dim} -> {self.cross_attn_hidden_dim}")
             # 使用慢速特征作为查询
             self.query_input_mapping = nn.Linear(self.query_input_dim, self.cross_attn_hidden_dim)
         elif self.query_type == 'learnable':
+            print(f"  使用可学习的查询标记")
+            print(f"  可学习查询参数形状: ({chunks_number}, {number_of_query}, {cross_attn_hidden_dim})")
             # 使用可学习的查询标记
-            # 由于添加了3D位置编码，因此不应在此处重复查询标记
             self.learnable_query = nn.Parameter(torch.randn(chunks_number, number_of_query, cross_attn_hidden_dim))
         else:
             raise NotImplementedError
         
+        print("\n第三步：构建时间嵌入")
         # 时间嵌入配置
         self.use_3d_rope = use_3d_rope
         if self.use_3d_rope:
+            print(f"  初始化3D旋转位置编码")
+            head_dim = self.cross_attn_hidden_dim // num_cross_attn_head
+            print(f"  RoPE维度 (hidden_dim/num_heads): {head_dim}")
             # 初始化3D旋转位置编码
-            self.temporal_embedding = Qwen2RotaryEmbedding(self.cross_attn_hidden_dim // num_cross_attn_head)
+            self.temporal_embedding = Qwen2RotaryEmbedding(head_dim)
         else:
+            print(f"  不使用时间嵌入")
             self.temporal_embedding = None
             
+        print("\n第四步：构建交叉注意力层")
         # 交叉注意力层
         self.cross_attn_layers = nn.ModuleList()
+        print(f"  构建{num_cross_attn_layer}个交叉注意力层")
         for i in range(num_cross_attn_layer):
+            print(f"  第{i}层交叉注意力:")
+            print(f"    - 查询维度: {self.cross_attn_hidden_dim}")
+            print(f"    - 键值维度: {input_mapping_out_channels}")
+            print(f"    - 输出维度: {self.cross_attn_hidden_dim}")
+            print(f"    - 注意力头数: {num_cross_attn_head}")
+            print(f"    - 前馈网络维度: {2*self.cross_attn_hidden_dim}")
             self.cross_attn_layers.append(
                 DecoderLayer(self.cross_attn_hidden_dim,    # 查询维度
                             input_mapping_out_channels,      # 键值维度
@@ -266,34 +315,47 @@ class PAVEModuleV5(nn.Module):
                             decoder_func=VideoCrossAttentionWith3DRope) # 使用带3D RoPE的视频交叉注意力
             )        
 
+        print("\n第五步：构建输出MLP")
         # 输出MLP配置
         self.use_output_mlp = use_output_mlp
         if self.use_output_mlp:
             mlp_input_dim = self.cross_attn_hidden_dim
             mlp_hidden_dim = mlp_input_dim * 2
+            print(f"  构建输出MLP:")
+            print(f"    - 输入维度: {mlp_input_dim}")
+            print(f"    - 隐藏维度: {mlp_hidden_dim}")
+            print(f"    - 输出维度: {self.output_dim}")
+            print(f"    - MLP深度: {self.mlp_depth}")
             # 构建MLP层
             modules = [nn.Linear(mlp_input_dim, mlp_hidden_dim)]
-            for _ in range(1, self.mlp_depth):
+            for depth in range(1, self.mlp_depth):
                 modules.append(nn.GELU())  # GELU激活函数
                 modules.append(nn.Linear(mlp_hidden_dim, self.output_dim))
+                print(f"    - 第{depth}层: GELU + Linear({mlp_hidden_dim} -> {self.output_dim})")
             self.output_mapping = nn.Sequential(*modules)
         else:
+            print(f"  不使用输出MLP")
             self.output_mapping = None
             # 确保维度匹配
             assert self.cross_attn_hidden_dim == output_dim
         
+        print("\n第六步：配置正则化和归一化")
         # Dropout配置
         self.use_dropout = use_dropout
         if self.use_dropout:
+            print(f"  启用Dropout，率: {dropout_rate}")
             self.output_dropout = nn.Dropout(p=dropout_rate)
         else:
+            print(f"  不使用Dropout")
             self.output_dropout = None
             
         # 层归一化配置
         self.use_output_norm = use_output_norm
         if self.use_output_norm:
+            print(f"  启用输出层归一化，维度: {self.output_dim}")
             self.output_norm = nn.LayerNorm(self.output_dim)
         else:
+            print(f"  不使用输出层归一化")
             self.output_norm = None
         
         self.module_dtype = None
@@ -301,23 +363,23 @@ class PAVEModuleV5(nn.Module):
         # 额外的开始结束标记配置
         self.train_addition_start_end_tokens = train_addition_start_end_tokens
         if self.train_addition_start_end_tokens:
-            # 训练额外的4个标记来表示视频和图像特征的开始和结束
-            # self.start_end_tokens[0]: 视频开始
-            # self.start_end_tokens[1]: 视频结束
-            # self.start_end_tokens[2]: 图像开始
-            # self.start_end_tokens[3]: 图像结束
+            print(f"  启用额外的开始结束标记，形状: (4, {self.output_dim})")
             self.start_end_tokens = nn.Parameter(torch.randn(4, self.output_dim))
         else:
+            print(f"  不使用额外的开始结束标记")
             self.start_end_tokens = None
 
+        print("\n第七步：权重初始化")
         # 权重初始化
         self.apply(self.__init_weights__)
         
         # 将输出归一化的gamma初始化为零（残差连接策略）
         if self.output_norm is not None:
+            print(f"  将输出归一化权重初始化为零")
             nn.init.zeros_(self.output_norm.weight)
             nn.init.zeros_(self.output_norm.bias)
         
+        print("=== PAVEModuleV5 初始化完成 ===\n")
 
     def __init_weights__(self, module,):
         """
@@ -345,105 +407,173 @@ class PAVEModuleV5(nn.Module):
                 slow_feats=None):
         """
         前向传播函数
-        
-        Args:
-            x: 快速特征 (B, T, H, W, C) - 主要的视频特征
-            frame_num: 每个样本的帧数 (B,) - 用于掩码的长度
-            q_text_embeds: 文本嵌入（暂未使用）
-            q_text_nums: 文本数量（暂未使用）
-            chunk_num: 块数量
-            slow_feats: 慢速特征列表 - 用作查询的特征，格式为 [torch.Size([32, 196, 896]), ...]
-            
-        Returns:
-            聚合后的多模态特征
-            
-        数据流：
-        1. 快速特征通过卷积网络映射：(B,T,H,W,4) -> (B,T,H,W,256) -> ... -> (B,T,H/2,W/2,512)
-        2. 慢速特征作为查询：(T,196,896) -> (T,196,512)
-        3. 通过交叉注意力融合：query与key-value特征交互
-        4. 经过MLP和归一化输出最终特征
         """
+        print("\n=== PAVEModuleV5 Forward 开始 ===")
+        print(f"输入参数统计:")
+        print(f"  - x (快速特征): {x.shape}")
+        print(f"  - frame_num: {frame_num}")
+        print(f"  - chunk_num: {chunk_num}")
+        if slow_feats is not None:
+            if isinstance(slow_feats, list):
+                print(f"  - slow_feats: 列表长度={len(slow_feats)}")
+                for i, feat in enumerate(slow_feats):
+                    print(f"    - slow_feats[{i}]: {feat.shape}")
+            else:
+                print(f"  - slow_feats: {slow_feats.shape}")
+        
+        print("\n第一步：数据类型转换")
         # 数据类型转换
         x = x.to(self.dtype)
+        print(f"  快速特征转换为: {x.dtype}")
         if slow_feats is not None:
             if isinstance(slow_feats, list):
                 slow_feats = [ele.to(self.dtype) for ele in slow_feats]
+                print(f"  慢速特征列表转换为: {slow_feats[0].dtype}")
             else:
                 slow_feats = slow_feats.to(self.dtype)
+                print(f"  慢速特征转换为: {slow_feats.dtype}")
         
         all_features = []
         
+        print(f"\n第二步：逐样本处理 (共{len(frame_num)}个样本)")
         # 对每个样本分别处理，将每个块转换为固定数量的标记
-        for curr_feat, curr_query, curr_len in zip(x, slow_feats, frame_num):
+        for sample_idx, (curr_feat, curr_query, curr_len) in enumerate(zip(x, slow_feats, frame_num)):
+            print(f"\n  --- 处理样本 {sample_idx} ---")
+            print(f"  输入维度:")
+            print(f"    - curr_feat: {curr_feat.shape}")
+            print(f"    - curr_query: {curr_query.shape}")
+            print(f"    - curr_len: {curr_len}")
+            
+            print(f"  步骤2.1：准备查询特征")
             # 准备查询特征
             if self.query_type == 'slow_feat':
+                print(f"    使用慢速特征作为查询")
+                print(f"    查询映射前: {curr_query.shape}")
                 # 使用慢速特征作为查询，通过线性层映射到交叉注意力维度
                 curr_query = self.query_input_mapping(curr_query) # (T, S, C)
+                print(f"    查询映射后: {curr_query.shape}")
             elif self.query_type == 'learnable':
+                print(f"    使用可学习查询标记")
                 # 使用可学习的查询标记
                 curr_query = self.learnable_query # (T, S, C)
+                print(f"    可学习查询形状: {curr_query.shape}")
             else:
                 raise NotImplementedError
                 
+            print(f"  步骤2.2：特征长度裁剪")
             # 根据实际长度裁剪特征
-            curr_feat = curr_feat[:curr_len] # (T, H, W, C) 例如：torch.Size([184, 28, 28, 4])
+            print(f"    裁剪前: {curr_feat.shape}")
+            curr_feat = curr_feat[:curr_len] # (T, H, W, C)
+            print(f"    裁剪后: {curr_feat.shape}")
             
+            print(f"  步骤2.3：快速特征映射")
             # 快速特征映射
             if self.fast_input_mapping_type == 'conv':
+                print(f"    使用卷积网络映射")
                 # 卷积映射：重排维度并通过卷积网络
+                print(f"    维度重排前: {curr_feat.shape}")
                 curr_feat = rearrange(curr_feat, "t h w c -> c t h w")  # 时间优先格式转为通道优先
+                print(f"    维度重排后: {curr_feat.shape}")
                 curr_feat = curr_feat.unsqueeze(dim=0)  # 添加批次维度
+                print(f"    添加批次维度后: {curr_feat.shape}")
                 
                 # 通过多层卷积网络处理
-                # [1, 4, 53, 28, 28] -> [1, 256, 53, 28, 28] -> ... -> [1, 512, 53, 14, 14]
-                for layer in self.input_mapping:
+                for layer_idx, layer in enumerate(self.input_mapping):
+                    input_shape = curr_feat.shape
                     curr_feat = layer(curr_feat)
+                    print(f"    第{layer_idx}层卷积: {input_shape} -> {curr_feat.shape}")
             else:
+                print(f"    使用线性映射")
                 # 线性映射
+                input_shape = curr_feat.shape
                 curr_feat = self.input_mapping(curr_feat)
+                print(f"    线性映射: {input_shape} -> {curr_feat.shape}")
                 curr_feat = rearrange(curr_feat, "t h w c -> c t h w")
                 curr_feat = curr_feat.unsqueeze(dim=0) # 保持 1, c, t, h, w 的维度格式
+                print(f"    维度调整后: {curr_feat.shape}")
                 
+            print(f"  步骤2.4：时间维度处理")
             # 时间维度上采样（如果当前特征长度小于所需块数）
             T = curr_feat.shape[2]
+            print(f"    当前时间维度: {T}, 目标chunk数: {chunk_num}")
             if T < chunk_num:
-                print(f'当前特征时间维度: {T}, 上采样到: {chunk_num}')
+                print(f"    需要上采样: {T} -> {chunk_num}")
                 temporal_scale_factor = chunk_num / T
+                print(f"    时间缩放因子: {temporal_scale_factor}")
                 # 使用三线性插值进行时间维度上采样
                 upsampling = nn.Upsample(scale_factor=(temporal_scale_factor, 1, 1), mode='trilinear', align_corners=True)
+                input_shape = curr_feat.shape
                 curr_feat = upsampling(curr_feat)
+                print(f"    上采样结果: {input_shape} -> {curr_feat.shape}")
+            else:
+                print(f"    无需上采样")
             
+            print(f"  步骤2.5：维度重排为交叉注意力格式")
             # 重新排列维度为交叉注意力所需格式
+            input_shape = curr_feat.shape
             curr_feat = rearrange(curr_feat, "b c t h w -> b t (h w) c")  # 空间维度展平
+            print(f"    维度重排: {input_shape} -> {curr_feat.shape}")
 
+            print(f"  步骤2.6：交叉注意力处理")
             # 交叉注意力处理
+            print(f"    查询特征添加批次维度前: {curr_query.shape}")
             output = curr_query.unsqueeze(dim=0)  # 添加批次维度：T_q, C, D -> 1, T_q, C, D 
-            for layer in self.cross_attn_layers:
+            print(f"    查询特征添加批次维度后: {output.shape}")
+            
+            for layer_idx, layer in enumerate(self.cross_attn_layers):
+                input_shape = output.shape
+                print(f"    第{layer_idx}层交叉注意力:")
+                print(f"      查询输入: {output.shape}")
+                print(f"      键值输入: {curr_feat.shape}")
                 # 执行交叉注意力：查询来自慢速特征，键值来自快速特征
                 output = layer(output,       # 查询：1, T_q, C, D 
                     curr_feat,               # 键值：b t (h w) c
                     memory_mask=None,        # 无记忆掩码
                     key_temporal_pos=self.temporal_embedding,  # 时间位置编码
                     rope_axis='spatial')     # RoPE应用于空间维度
+                print(f"      交叉注意力输出: {input_shape} -> {output.shape}")
             
+            print(f"  步骤2.7：输出格式调整")
             # 重塑输出格式
+            print(f"    重塑前: {output.shape}")
             output = output.view(-1, output.shape[-1])  # 展平为2D
+            print(f"    展平后: {output.shape}")
             output = output.unsqueeze(dim=0)  # 添加批次维度
+            print(f"    添加批次维度后: {output.shape}")
             all_features.append(output)
         
+        print(f"\n第三步：合并所有样本特征")
         # 合并所有样本的特征
+        print(f"  合并前特征数量: {len(all_features)}")
+        print(f"  各样本特征形状: {[feat.shape for feat in all_features]}")
         output = torch.cat(all_features, dim=0)
+        print(f"  合并后特征形状: {output.shape}")
         
+        print(f"\n第四步：输出映射层")
         # 输出映射层
         if self.output_mapping is not None:
+            input_shape = output.shape
             output = self.output_mapping(output)
+            print(f"  MLP映射: {input_shape} -> {output.shape}")
+        else:
+            print(f"  跳过MLP映射")
             
+        print(f"\n第五步：正则化处理")
         # Dropout正则化
         if self.output_dropout is not None:
+            print(f"  应用Dropout")
             output = self.output_dropout(output)
+        else:
+            print(f"  跳过Dropout")
             
         # 输出归一化
         if self.output_norm is not None:
+            input_shape = output.shape
             output = self.output_norm(output)
+            print(f"  层归一化: {input_shape} -> {output.shape}")
+        else:
+            print(f"  跳过层归一化")
 
+        print(f"\n最终输出形状: {output.shape}")
+        print("=== PAVEModuleV5 Forward 完成 ===\n")
         return output

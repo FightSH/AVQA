@@ -1,6 +1,7 @@
+export CUDA_VISIBLE_DEVICES=2
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
 
-CUDA_VISIBLE_DEVICES=1 WANDB__SERVICE_WAIT=500  deepspeed --include=localhost:0 --master_port 60000 /mnt/sda/shenhao/code/AVQA/PAVE-main/train_pave_w_feat.py \
-    --deepspeed /mnt/sda/shenhao/code/AVQA/PAVE-main/scripts/zero2.json \
+python /mnt/sda/shenhao/code/AVQA/PAVE-main/train_pave_w_feat.py \
     --lora_enable True \
     --annotation_path /mnt/sda/shenhao/code/AVQA/PAVE-main/annots/music_avqa/music_avqa_train_instruct_duplicate_audio.json \
     --fast_path_mapping_path /mnt/sda/shenhao/code/AVQA/PAVE-main/annots/music_avqa/music_avqa_all_imagebind_feature_mapping.json \
@@ -38,3 +39,9 @@ CUDA_VISIBLE_DEVICES=1 WANDB__SERVICE_WAIT=500  deepspeed --include=localhost:0 
     --mm_spatial_pool_mode bilinear \
     --feat_combine_method add \
     --fast_feat_type audio
+
+# 方法2：如果必须使用DeepSpeed，尝试这个配置
+# export CUDA_VISIBLE_DEVICES=2
+# export CUDA_DEVICE_ORDER=PCI_BUS_ID
+# python -m deepspeed --num_gpus=1 --num_nodes=1 /mnt/sda/shenhao/code/AVQA/PAVE-main/train_pave_w_feat.py \
+#     ...existing parameters...
