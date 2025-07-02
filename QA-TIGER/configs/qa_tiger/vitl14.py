@@ -22,7 +22,7 @@ config = dict(
         ),
         loss_weight=dict(
             major_loss_weight=1,
-            distribution_loss_weight=0.3,     # 0.01
+            distribution_loss_weight=0.2,     # 0.01
             euclidean_distance_fusion_q_weight=0.1,
             euclidean_distance_fusion_a_weight=0.5,
             euclidean_distance_fusion_v_weight=0.5,
@@ -56,9 +56,19 @@ config = dict(
 
         # precomputed features
         quest_feat=None,
+        # (60, 128)
         audio_feat='/mnt/sda/shenhao/datasets/MUSIC-AVQA/feats/qa_tiger/audit_feat/60vggish/',
-        video_feat='/mnt/sda/shenhao/datasets/MUSIC-AVQA/feats/qa_tiger/clip_feat/',
+        # (60, 768)
+        # video_feat='/mnt/sda/shenhao/datasets/MUSIC-AVQA/feats/qa_tiger/clip_feat/',
+        # (60, 14, 1024)
         patch_feat='/mnt/sda/shenhao/datasets/MUSIC-AVQA/feats/qa_tiger/tome_feat/',
+
+        # audio_feat='/mnt/sda/shenhao/datasets/MUSIC-AVQA/feats/qa_tiger/audit_feat/60vggish/',
+        # (60, 1152)
+        video_feat='/mnt/sda/shenhao/datasets/siglip/MUSIC-AVQA/global_features/',    
+        # (60, 729, 1152)
+        # patch_feat='/mnt/sda/shenhao/datasets/siglip/MUSIC-AVQA/patch_features/',
+
         prompt_feat=None,
     ),
 
@@ -67,13 +77,14 @@ config = dict(
         model_type="QA-TIGER_ViTL14@336px",
         model=dict(
             d_model=512,
-            video_dim=768,
+            video_dim=1152,
             patch_dim=1024,
             quest_dim=512,
             audio_dim=128,
             topK=7,
             num_experts=7,
-            encoder_type='ViT-L/14@336px',
+            # encoder_type='ViT-L/14@336px',
+            encoder_type='google/siglip-so400m-patch14-384',
             mccd_flag=True,
             lambda_multifaceted=0.001,
         ),

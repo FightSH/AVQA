@@ -10,6 +10,7 @@ from typing import Dict
 from .MCCD.layer import MCCD_MLP  # 导入MCCD的MLP模块
 
 from .encoders import CLIP_TEncoder  # 导入CLIP文本编码器
+from .encoders import SigLIP_TEncoder  # 导入SigLIP文本编码器
 from .modules import (
     Projection, QstGrounding,  # 导入自定义模块：投影、问题定位
     TempMoE, AVQCrossAttn,  # 导入自定义模块：时序混合专家、音视问交叉注意力
@@ -48,7 +49,11 @@ class QA_TIGER(nn.Module):
         self.quest_proj = Projection(video_dim, d_model)  # 问题特征投影 (维度与video_dim一致，可能笔误或特定设计)
 
         # 初始化CLIP文本编码器用于编码问题文本
-        self.quest_encoder = CLIP_TEncoder(encoder_type)
+        if encoder_type == 'ViT-L/14@336px':
+            self.quest_encoder = CLIP_TEncoder(encoder_type)
+
+        if encoder_type == 'google/siglip-so400m-patch14-384':
+            self.quest_encoder = SigLIP_TEncoder(model_name= encoder_type)
         self.quest_encoder.freeze()  # 冻结文本编码器的参数，不参与训练
 
         # self.a_attn = AVQCrossAttn(d_model, 8)  # 音频-注意力模块
@@ -135,6 +140,7 @@ class QA_TIGER(nn.Module):
             input question shape:   [B, D] or [B, SeqLen] (批量大小, 问题特征维度 或 批量大小, 问题序列长度)
         '''
         return_dict = {}  # 用于存储返回结果的字典
+        # print(f'input reshaped_data keys: {reshaped_data.keys()}')  # 打印输入数据的键
 
         # 调用sub_forward获取处理后的问题、词语、音频、视频和patch特征 (此处prefix为空，处理正样本)
         quest, words, audio, video, patch = self.sub_forward(reshaped_data, prefix='')
@@ -144,15 +150,15 @@ class QA_TIGER(nn.Module):
         # print(f'audio shape: {audio.shape}')
         video = self.video_proj(video)  # [B, T, D]
         # print(f'video shape: {video.shape}')
-        words = self.words_proj(words)  # [B, 77, D] (假设CLIP词序列长度为77)
+        words = self.words_proj(words)  # [B, 77, D] (假设CLIP词序列长度为77) 如果siglip那么为 [B, 64, D]
         quest = self.quest_proj(quest)  # [B, D]
         # print(f'quest shape: {quest.shape}')
         patch = self.patch_proj(patch)  # [B, T, P, D]
 
-
+        q_bias_logits, a_bias_logits, v_bias_logits = None, None, None
         # MCCD模块
         if self.mccd is not None and self.mccd['flag'] is True:
-            q_bias_logits, a_bias_logits, v_bias_logits = None, None, None
+           
             if self.mccd['bias_learner']['q_bias']:
 
                 q_bias_logits = self.get_bias_classifier_logits_q(quest)

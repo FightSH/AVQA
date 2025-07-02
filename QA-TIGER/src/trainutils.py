@@ -24,7 +24,7 @@ from src.dataset import AVQA_dataset, qtype2idx
 from src.utils import calculate_parameters
 from src.models.net import QA_TIGER
 from src.models.tspm import TSPM
-
+from models.MCCD.criterion import MCCD_Criterion 
 
 class AverageMeter(object):
     def __init__(self) -> None:
@@ -278,7 +278,12 @@ def train(cfg: dict,
 
         loss = 0
         target = reshaped_data['label']
-        ce_loss = criterion(output, target)
+
+        if isinstance(criterion, MCCD_Criterion):
+            ce_loss = criterion(output, target)
+        else:    
+            ce_loss = criterion(output['out'], target)
+
         loss += ce_loss
         losses = [('ce_loss', ce_loss)]
         for key in output:
@@ -367,7 +372,15 @@ def evaluate(cfg: dict,
 
             total += predicted.size(0)
             correct += (predicted == target).sum().item()
-            loss += criterion(output, target) / len(val_loader)
+
+            if isinstance(criterion, MCCD_Criterion):
+                loss += criterion(output, target) / len(val_loader)
+                # ce_loss = criterion(output, target)
+            else:    
+                loss += criterion(output['out'], target) / len(val_loader)
+                # ce_loss = criterion(output['out'], target)
+
+            
             
             # 记录错误预测
             if error_analyzer is not None:

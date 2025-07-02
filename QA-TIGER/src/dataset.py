@@ -51,8 +51,10 @@ class AVQA_dataset(Dataset):
         self.prompt_feat = (ROOT / self.root / config.data.prompt_feat).as_posix() \
             if config.data.prompt_feat is not None else None
 
-        self.tokenizer = tokenize
-        self.bert_tokenizer = AutoTokenizer.from_pretrained('google-bert/bert-base-uncased')
+        # self.tokenizer = tokenize
+        # self.bert_tokenizer = AutoTokenizer.from_pretrained('google-bert/bert-base-uncased')
+        self.tokenizer = AutoTokenizer.from_pretrained('google/siglip-so400m-patch14-384',
+                                                       cache_dir='/mnt/sda/shenhao/models')
         self.size = config.data.img_size
         self.sample_rate = config.data.frame_sample_rate
 
@@ -90,26 +92,43 @@ class AVQA_dataset(Dataset):
 
     def load_samples(self, sample):
         # question preprocess
+
+        # print(f'Loading {sample["video_id"]} ...')
+
         labels = torch.tensor(data=[self.answer_to_ix[sample['anser']]], dtype=torch.long)
         ques_type = ast.literal_eval(sample['type'])
         qtype_label = torch.tensor([qtype2idx[ques_type[0]][ques_type[1]]], dtype=torch.long)
         if self.quest_feat is not None:
             quest_id = sample['question_id']
             quest = np.load(Path(self.quest_feat) / f'{int(quest_id)}.npy')
-            prompt = np.load(Path(self.prompt_feat) / f'{int(quest_id)}.npy')
+            # prompt = np.load(Path(self.prompt_feat) / f'{int(quest_id)}.npy')
         else:
             question = sample['question_content']
-            quest = self.tokenizer(question, truncate=True).squeeze()
+            # clip使用
+            # quest = self.tokenizer(question, truncate=True).squeeze()
+            # siglip使用
+            quest = self.tokenizer(question, max_length=64, padding='max_length', 
+                     truncation=True, return_tensors='pt')['input_ids'].squeeze(0)
             # prompt = self.tokenizer(sample['qprompt'], truncate=True).squeeze()
 
         # sampling frames
         name = sample['video_id']
         if self.video_feat is not None:
+            # print(f'Loading {sample["video_id"]} video_feat ...')
             video = np.load(Path(self.video_feat) / f'{name}.npy')
-            video = torch.from_numpy(video)[::self.sample_rate]
+            if self.sample_rate > 1:
+                video = torch.from_numpy(video)[::self.sample_rate]
+            else:
+                video = torch.from_numpy(video)
+            # print(f'Loading {sample["video_id"]} video_feat over...')
             if self.patch_feat is not None:
+                # print(f'Loading {sample["video_id"]} patch_feat...')
                 patch = np.load(Path(self.patch_feat) / f'{name}.npy')
-                patch = torch.from_numpy(patch)[::self.sample_rate]
+                if self.sample_rate > 1:
+                    patch = torch.from_numpy(patch)[::self.sample_rate]
+                else:
+                    patch = torch.from_numpy(patch)
+                # print(f'Loading {sample["video_id"]} patch_feat... over')
             else:
                 patch = None
         else:
@@ -186,10 +205,19 @@ class AVQA_dataset(Dataset):
             with open(file=train_path.as_posix(), mode='r') as f:
                 samples = json.load(f)
             for sample in tqdm(samples):
+                # clip 使用
+                # que_tokens = self.tokenizer(
+                #     sample['question_content'].lstrip().rstrip()[:-1]
+                # )
+                # que_len = len(torch.nonzero(que_tokens['input_ids']))
+                # siglip 使用
                 que_tokens = self.tokenizer(
-                    sample['question_content'].lstrip().rstrip()[:-1]
+                    sample['question_content'].lstrip().rstrip()[:-1],
+                    return_tensors='pt'
                 )
                 que_len = len(torch.nonzero(que_tokens['input_ids']))
+
+
                 if max_que_len < que_len:
                     max_que_len = que_len
 
