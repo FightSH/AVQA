@@ -9,14 +9,19 @@ from torch import Tensor
 from typing import Dict
 from .MCCD.layer import MCCD_MLP  # 导入MCCD的MLP模块
 
-from .encoders import CLIP_TEncoder  # 导入CLIP文本编码器
-from .encoders import SigLIP_TEncoder  # 导入SigLIP文本编码器
+from .encoders import(CLIP_TEncoder,Hug_Clip_TEncoder,SigLIP_TEncoder,SigLIP2_TEncoder)   # 导入CLIP文本编码器
 from .modules import (
     Projection, QstGrounding,  # 导入自定义模块：投影、问题定位
     TempMoE, AVQCrossAttn,  # 导入自定义模块：时序混合专家、音视问交叉注意力
-    PatchSelecter  # 导入自定义模块：Patch选择器
+    PatchSelecter,  # 导入自定义模块：Patch选择器
+    
 )
+
+
+
 # from .TWM.net_encoders import AMS  # 导入自适应多尺度稀疏混合专家模型
+
+from .PAVE.info_aggregator import PAVEModuleV5
 
 
 # 定义QA-TIGER模型类，继承自nn.Module
@@ -39,7 +44,8 @@ class QA_TIGER(nn.Module):
         self.nce_loss = nce_loss  # 存储nce_loss标志
         self.late_fusion = late_fusion  # 存储late_fusion标志
         self.mccd = mccd
-        
+        #
+
 
         # 定义各种输入特征的投影层，将它们投影到统一的d_model维度
         self.audio_proj = Projection(audio_dim, d_model)  # 音频特征投影
@@ -48,18 +54,29 @@ class QA_TIGER(nn.Module):
         self.words_proj = Projection(video_dim, d_model)  # 词语特征投影 (维度与video_dim一致，可能笔误或特定设计)
         self.quest_proj = Projection(video_dim, d_model)  # 问题特征投影 (维度与video_dim一致，可能笔误或特定设计)
 
+        
+
         # 初始化CLIP文本编码器用于编码问题文本
         if encoder_type == 'ViT-L/14@336px':
             self.quest_encoder = CLIP_TEncoder(encoder_type)
-
+        if encoder_type == 'openai/clip-vit-large-patch14':
+            self.quest_encoder = Hug_Clip_TEncoder(encoder_type)
         if encoder_type == 'google/siglip-so400m-patch14-384':
             self.quest_encoder = SigLIP_TEncoder(model_name= encoder_type)
+
+        if encoder_type == 'google/siglip2-so400m-patch14-384':
+            self.quest_encoder = SigLIP2_TEncoder(model_name= encoder_type)
+
         self.quest_encoder.freeze()  # 冻结文本编码器的参数，不参与训练
 
+
+        self.temporal_aggregator = PAVEModuleV5(input_dim=d_model, output_dim=d_model, embed_dim=512)
+        self.temporal_aggregator2 = PAVEModuleV5(input_dim=d_model, output_dim=d_model, embed_dim=512)
+        # 没有必要再在这里添加了
         # self.a_attn = AVQCrossAttn(d_model, 8)  # 音频-注意力模块
         # self.v_attn = AVQCrossAttn(d_model, 8)  # 视频-注意力模块
-        self.a_attn = nn.MultiheadAttention(d_model, 8 )
-        self.v_attn = nn.MultiheadAttention(d_model, 8 )
+        # self.a_attn = nn.MultiheadAttention(d_model, 8 )
+        # self.v_attn = nn.MultiheadAttention(d_model, 8 )
         
         # 定义模型的核心组件
         self.crs_attn = AVQCrossAttn(d_model, 8)  # 音频-视频-问题交叉注意力模块
@@ -139,52 +156,58 @@ class QA_TIGER(nn.Module):
             input patch shape:      [B, T, P, PC] (批量大小, 时序长度, Patch数量, Patch特征维度)
             input question shape:   [B, D] or [B, SeqLen] (批量大小, 问题特征维度 或 批量大小, 问题序列长度)
         '''
+
+        
+
         return_dict = {}  # 用于存储返回结果的字典
-        # print(f'input reshaped_data keys: {reshaped_data.keys()}')  # 打印输入数据的键
+        # logger.debug(f'input reshaped_data keys: {reshaped_data.keys()}')  # 打印输入数据的键
 
         # 调用sub_forward获取处理后的问题、词语、音频、视频和patch特征 (此处prefix为空，处理正样本)
         quest, words, audio, video, patch = self.sub_forward(reshaped_data, prefix='')
 
-        # 特征投影: 将各种模态的特征投影到统一的d_model维度
-        audio = self.audio_proj(audio)  # [B, T, D]
-        # print(f'audio shape: {audio.shape}')
-        video = self.video_proj(video)  # [B, T, D]
-        # print(f'video shape: {video.shape}')
-        words = self.words_proj(words)  # [B, 77, D] (假设CLIP词序列长度为77) 如果siglip那么为 [B, 64, D]
-        quest = self.quest_proj(quest)  # [B, D]
-        # print(f'quest shape: {quest.shape}')
-        patch = self.patch_proj(patch)  # [B, T, P, D]
+
+
+        
+        # Projection
+        audio = self.audio_proj(audio) # [B, T, D]
+        video = self.video_proj(video) # [B, T, D]
+        words = self.words_proj(words) # [B, 77, D]
+        quest = self.quest_proj(quest) # [B, D]
+        patch = self.patch_proj(patch) # [B, T, P, D]
+       
+
+
 
         q_bias_logits, a_bias_logits, v_bias_logits = None, None, None
         # MCCD模块
         if self.mccd is not None and self.mccd['flag'] is True:
-           
             if self.mccd['bias_learner']['q_bias']:
-
                 q_bias_logits = self.get_bias_classifier_logits_q(quest)
-                # print(f'q_bias_logits shape: {q_bias_logits.shape}')
+                # logger.debug(f'q_bias_logits shape: {q_bias_logits.shape}')
             if self.mccd['bias_learner']['a_bias']:
                 a_bias_logits_pooled = audio.mean(dim=1)
                 a_bias_logits = self.get_bias_classifier_logits_a(a_bias_logits_pooled)
-                # print(f'a_bias_logits shape: {a_bias_logits.shape}')
+                # logger.debug(f'a_bias_logits shape: {a_bias_logits.shape}')
             if self.mccd['bias_learner']['v_bias']:
                 v_bias_logits_pooled = video.mean(dim=1)
                 v_bias_logits = self.get_bias_classifier_logits_v(v_bias_logits_pooled)
-                # print(f'v_bias_logits shape: {v_bias_logits.shape}')
+                # logger.debug(f'v_bias_logits shape: {v_bias_logits.shape}')
 
 
 
+        frame_num = torch.tensor([60], device='cuda:0')
+        fast = audio.unsqueeze(2).unsqueeze(3)
+        video = video.unsqueeze(2) 
+        video = video + self.temporal_aggregator(fast,frame_num=frame_num,chunk_num=60,slow_feats=video)
+        video = video.squeeze(2) 
 
-        # 增加一个自注意力模块
-        # audio,temp = self.a_attn(audio, audio, words)
-        # video,temp = self.v_attn(video, video, words)
-        audio = audio.transpose(0, 1)  # [T, B, D]
-        audio, _ = self.a_attn(audio, audio, audio)
-        audio = audio.transpose(0, 1)  # [B, T, D]
 
-        video = video.transpose(0, 1)
-        video, _ = self.v_attn(video, video, video)
-        video = video.transpose(0, 1)
+        
+        patch = patch + self.temporal_aggregator2(fast,frame_num=frame_num,chunk_num=60,slow_feats=patch)
+        
+        # logger.debug(f'patchOr shape: {patchOr.shape}')  # 输出patchOr的形状
+        # logger.debug(f'融合后patchOr shape: {fusion_patch.shape}')
+
 
 
 
@@ -201,7 +224,6 @@ class QA_TIGER(nn.Module):
         fusion = self.quest_grounding(quest, [ap_global, vp_global])  # [B, D]
         # 6. 问题引导的多模态特征融合 (第二层融合第一层结果和全局音频特征)
         fusion = self.quest_grounding(quest, [fusion.unsqueeze(1), a_global])  # [B, D]
-
         # 分类头
         fusion = self.head_act(fusion)  # ReLU激活
         output = self.head(fusion)  # 线性层输出最终的分类logits: [B, num_answers]
@@ -212,7 +234,7 @@ class QA_TIGER(nn.Module):
 
         
 
-        # print(f'output shape: {output.shape}')  # 输出形状: [B, num_answers]
+        # logger.debug(f'output shape: {output.shape}')  # 输出形状: [B, num_answers]
         # return return_dict
         return {
             'out': output,
