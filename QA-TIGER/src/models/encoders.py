@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from transformers import SiglipTextModel, SiglipProcessor
+from transformers import SiglipTextModel, SiglipProcessor,Siglip2TextModel,CLIPTextModel
 
 from src.models.clip import load
 
@@ -36,6 +36,46 @@ class CLIP_TEncoder(nn.Module):
         x = x.permute(1, 0, 2)  # LND -> NLD
         x = self.ln_final(x).type(self.dtype)
         return x[torch.arange(x.shape[0]), torch.argmax(text, dim=-1)] @ self.text_projection, x
+    
+
+class Hug_Clip_TEncoder(nn.Module):
+    def __init__(self, model_name: str = "openai/clip-vit-large-patch14",model_path: str = '/mnt/sda/shenhao/models'):
+        super(Hug_Clip_TEncoder, self).__init__()
+        
+        self.model = CLIPTextModel.from_pretrained(model_name,cache_dir=model_path)
+        # self.processor = SiglipProcessor.from_pretrained(model_name,cache_dir=model_path)
+        self.dtype = torch.float32
+        
+    def freeze(self):
+        for param in self.model.parameters():
+            param.requires_grad = False
+    
+    def forward(self, text: torch.Tensor):
+        """
+        Args:
+            text: tokenized的tensor，与CLIP_TEncoder保持一致 [batch_size, seq_len]
+        Returns:
+            tuple: (projected_features, last_hidden_state) 与CLIP_TEncoder输出格式一致
+        """
+        # 创建attention_mask
+        attention_mask = (text != 0).long()
+        
+        # 获取模型输出
+        outputs = self.model(input_ids=text, attention_mask=attention_mask)
+        
+        # 获取最后一层隐藏状态
+        last_hidden_state = outputs.last_hidden_state  # [batch_size, seq_len, hidden_size]
+        
+        # 获取EOS token的位置（类似CLIP的argmax操作）
+        # 找到每个序列中最后一个非零token的位置
+        sequence_lengths = attention_mask.sum(dim=1) - 1  # 减1是因为索引从0开始
+        batch_size = text.shape[0]
+        
+        # 提取EOS token的特征作为句子级表示
+        sentence_features = last_hidden_state[torch.arange(batch_size), sequence_lengths]
+        
+        return sentence_features, last_hidden_state
+
     
 class SigLIP_TEncoder(nn.Module):
     def __init__(self, model_name: str = "google/siglip-so400m-patch14-384",model_path: str = '/mnt/sda/shenhao/models'):
@@ -73,4 +113,44 @@ class SigLIP_TEncoder(nn.Module):
         # 提取EOS token的特征作为句子级表示
         sentence_features = last_hidden_state[torch.arange(batch_size), sequence_lengths]
         
+        return sentence_features, last_hidden_state
+
+
+class SigLIP2_TEncoder(nn.Module):
+    def __init__(self, model_name: str = "google/siglip2-so400m-patch14-384",model_path: str = '/mnt/sda/shenhao/models/siglip2'):
+        super(SigLIP2_TEncoder, self).__init__()
+
+        self.model = Siglip2TextModel.from_pretrained(model_name, cache_dir=model_path)
+        # self.processor = Siglip2Processor.from_pretrained(model_name, cache_dir=model_path,use_fast=True)
+        self.dtype = torch.float32
+        # self.text_projection = nn.Linear(self.model.config.hidden_size, proj_dim)  # 新增投影层
+
+    def freeze(self):
+        for param in self.model.parameters():
+            param.requires_grad = False
+
+    def forward(self, text: torch.Tensor):
+        """
+        Args:
+            text: tokenized的tensor，与CLIP_TEncoder保持一致 [batch_size, seq_len]
+        Returns:
+            tuple: (projected_features, last_hidden_state) 与CLIP_TEncoder输出格式一致
+        """
+        # 创建attention_mask
+        attention_mask = (text != 0).long()
+
+        # 获取模型输出
+        outputs = self.model(input_ids=text, attention_mask=attention_mask)
+
+        # 获取最后一层隐藏状态
+        last_hidden_state = outputs.last_hidden_state  # [batch_size, seq_len, hidden_size]
+
+        # 获取EOS token的位置（类似CLIP的argmax操作）
+        # 找到每个序列中最后一个非零token的位置
+        sequence_lengths = attention_mask.sum(dim=1) - 1  # 减1是因为索引从0开始
+        batch_size = text.shape[0]
+
+        # 提取EOS token的特征作为句子级表示
+        sentence_features = last_hidden_state[torch.arange(batch_size), sequence_lengths]
+
         return sentence_features, last_hidden_state

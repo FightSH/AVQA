@@ -9,7 +9,7 @@ ROOT = FILE.parents[2]
 sys.path.append(ROOT.as_posix())
 
 from torch import Tensor
-from typing import List, Union, Optional  # 从 typing 模块导入类型提示工具
+from typing import List, Union, Optional, Any  # 从 typing 模块导入类型提示工具
 
 import torch
 import torch.nn as nn  # PyTorch神经网络模块
@@ -157,18 +157,137 @@ class AVCrossAttn(nn.Module):
 
 
 class AVQCrossAttn(nn.Module):
-    """
-    音视频问句交叉注意力模块 (Audio-Visual-Question Cross-Attention)。
-    此模块在音视频交叉注意力的基础上，额外引入了问句 (Question) 特征，
-    使得音视频特征的交互也受到问句的引导。
-    """
+    def __init__(self,
+                 d_model: int = 512,
+                 nhead: int = 8,
+                 dropout: float = 0.1
+    ):
+        super(AVQCrossAttn, self).__init__()
+
+        self.qst_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        self.crs_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        self.slf_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        self.linear1 = nn.Linear(d_model, d_model)
+        self.linear2 = nn.Linear(d_model, d_model)
+        self.dropout = nn.Dropout(dropout)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        
+        nn.init.kaiming_normal_(self.linear1.weight)
+        nn.init.constant_(self.linear1.bias, 0)
+        nn.init.kaiming_normal_(self.linear2.weight)
+        nn.init.constant_(self.linear2.bias, 0)
+    
+    def sub_forward(self, 
+                src_q: Tensor,
+                src_v: Tensor,
+                query: Tensor,
+                visualize: bool = False
+    ) -> Tensor:
+
+        src_q = src_q.permute(1, 0, 2)
+        src_v = src_v.permute(1, 0, 2)
+        query = query.permute(1, 0, 2)
+        
+        qst_attn, weight = self.qst_attn(src_q, query, query)
+        slf_attn = self.slf_attn(src_q, src_q, src_q)[0]
+        crs_attn = self.crs_attn(src_q, src_v, src_v)[0]
+        src_q = src_q + \
+                self.dropout(slf_attn) + \
+                self.dropout(crs_attn) + \
+                self.dropout(qst_attn)
+        src_q = self.norm1(src_q)
+        
+        src_q = src_q + \
+                self.dropout(self.linear2(self.dropout(F.relu(self.linear1(src_q)))))
+        src_q = self.norm2(src_q)
+        return src_q.permute(1, 0, 2), weight
+    
+    def forward(self, 
+                src_q: Tensor,
+                src_v: Tensor,
+                query: Tensor,
+                visualize: bool = False
+    ) -> List[Tensor]:
+
+        src1, a_weight = self.sub_forward(src_q, src_v, query, visualize)
+        src2, v_weight = self.sub_forward(src_v, src_q, query, visualize)
+        
+        if visualize:
+            return src1, src2, [a_weight, v_weight]
+        return src1, src2
+    def __init__(self,
+                 d_model: int = 512,
+                 nhead: int = 8,
+                 dropout: float = 0.1
+                 ):
+        super(AVQCrossAttn, self).__init__()
+
+        self.qst_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        self.crs_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        self.slf_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        self.linear1 = nn.Linear(d_model, d_model)
+        self.linear2 = nn.Linear(d_model, d_model)
+        self.dropout = nn.Dropout(dropout)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+
+        nn.init.kaiming_normal_(self.linear1.weight)
+        nn.init.constant_(self.linear1.bias, 0)
+        nn.init.kaiming_normal_(self.linear2.weight)
+        nn.init.constant_(self.linear2.bias, 0)
+
+    def sub_forward(self,
+                    src_q: Tensor,
+                    src_v: Tensor,
+                    query: Tensor,
+                    visualize: bool = False
+                    ) -> Tensor:
+        src_q = src_q.permute(1, 0, 2)
+        src_v = src_v.permute(1, 0, 2)
+        query = query.permute(1, 0, 2)
+        
+        qst_attn, weight = self.qst_attn(src_q, query, query)
+        
+        slf_attn = self.slf_attn(src_q, src_q, src_q)[0]
+        
+        crs_attn = self.crs_attn(src_q, src_v, src_v)[0]
+        src_q = src_q + \
+                self.dropout(slf_attn) + \
+                self.dropout(crs_attn) + \
+                self.dropout(qst_attn)
+        src_q = self.norm1(src_q)
+
+        src_q = src_q + \
+                self.dropout(self.linear2(self.dropout(F.relu(self.linear1(src_q)))))
+        src_q = self.norm2(src_q)
+        return src_q.permute(1, 0, 2), weight
+
+    def forward(self,
+                src_q: Tensor,
+                src_v: Tensor,
+                query: Tensor,
+                visualize: bool = False
+                ) -> List[Tensor]:
+        # audio，video，words
+        src1, a_weight = self.sub_forward(src_q, src_v, query, visualize)
+        # video，audio，words
+        src2, v_weight = self.sub_forward(src_v, src_q, query, visualize)
+
+        if visualize:
+            return src1, src2, [a_weight, v_weight]
+        return src1, src2
+
+
+class AVQ_Gate_CrossAttn(nn.Module):
+
 
     def __init__(self,
                  d_model: int = 512,  # 模型维度
                  nhead: int = 8,  # 多头注意力头数
                  dropout: float = 0.1  # Dropout 比率
                  ):
-        super(AVQCrossAttn, self).__init__()
+        super(AVQ_Gate_CrossAttn, self).__init__()
 
         # 问句注意力层：模态特征作为 query，问句特征作为 key 和 value
         self.qst_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
@@ -176,6 +295,14 @@ class AVQCrossAttn(nn.Module):
         self.crs_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
         # 自注意力层 (模态内部)
         self.slf_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        
+        # 动态门控网络：根据输入特征动态生成三个门控权重
+        self.gate_generator = nn.Sequential(
+            nn.Linear(d_model, d_model // 4),
+            nn.ReLU(),
+            nn.Linear(d_model // 4, 3)  # 输出3个门控值，分别对应自注意、交叉注意、问句注意
+        )
+
         # 前馈网络
         self.linear1 = nn.Linear(d_model, d_model)
         self.linear2 = nn.Linear(d_model, d_model)
@@ -190,15 +317,25 @@ class AVQCrossAttn(nn.Module):
         nn.init.constant_(self.linear1.bias, 0)
         nn.init.kaiming_normal_(self.linear2.weight)
         nn.init.constant_(self.linear2.bias, 0)
+        # 初始化门控网络的权重
+        self.gate_generator.apply(self._init_gate_weights)
+
+    def _init_gate_weights(self, m: nn.Module):
+        """自定义门控网络权重初始化函数"""
+        if isinstance(m, nn.Linear):
+            nn.init.kaiming_normal_(m.weight)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
 
     def sub_forward(self,
                     src_q: Tensor,  # 作为 query 的源模态特征 (例如音频)
                     src_v: Tensor,  # 作为 key/value 的源模态特征 (例如视频)
                     query: Tensor,  # 问句特征
                     visualize: bool = False  # 是否返回注意力权重 (此参数在此处不直接影响逻辑，但外部调用时可能有关)
-                    ) -> Tensor:
+                    ) -> tuple[Any, Any]:
         """
         子前向传播过程，处理一个方向的注意力，并融合问句信息。
+        (已更新：使用动态门控机制)
         Args:
             src_q (Tensor): 查询序列 (Batch, Seq_q, Dim)。
             src_v (Tensor): 键/值序列 (Batch, Seq_v, Dim)。
@@ -208,33 +345,49 @@ class AVQCrossAttn(nn.Module):
             Tuple[Tensor, Tensor]: 处理后的查询序列 (Batch, Seq_q, Dim) 和问句注意力权重。
         """
         # 维度置换 (Batch, Seq, Dim) -> (Seq, Batch, Dim) 以适应 MultiheadAttention
-        src_q = src_q.permute(1, 0, 2)
-        src_v = src_v.permute(1, 0, 2)
-        query = query.permute(1, 0, 2)  # 问句特征也进行置换
+        src_q_permuted = src_q.permute(1, 0, 2)
+        src_v_permuted = src_v.permute(1, 0, 2)
+        query_permuted = query.permute(1, 0, 2)  # 问句特征也进行置换
 
-        # 1. 多种注意力融合
-        # 问句注意力：src_q 对 query (问句) 进行注意力 (src_q 作为 query, query 作为 key 和 value)
-        qst_attn_out, weight = self.qst_attn(src_q, query, query)  # weight 是问句注意力权重
+        # 1. 并行计算三种注意力
+        # 问句注意力：src_q 对 query (问句) 进行注意力
+        qst_attn_out, weight = self.qst_attn(src_q_permuted, query_permuted, query_permuted)
         # 自注意力：src_q 对自身进行自注意力
-        slf_attn_out = self.slf_attn(src_q, src_q, src_q)[0]
+        slf_attn_out = self.slf_attn(src_q_permuted, src_q_permuted, src_q_permuted)[0]
         # 交叉注意力：src_q 对 src_v 进行交叉注意力
-        crs_attn_out = self.crs_attn(src_q, src_v, src_v)[0]
-        # 残差连接：原始 src_q 加上三种注意力（自、交叉、问句）的 dropout 输出
-        src_q = src_q + \
-                self.dropout(slf_attn_out) + \
-                self.dropout(crs_attn_out) + \
-                self.dropout(qst_attn_out)
-        # 第一个层归一化
-        src_q = self.norm1(src_q)
+        crs_attn_out = self.crs_attn(src_q_permuted, src_v_permuted, src_v_permuted)[0]
 
-        # 2. 前馈网络
-        ffn_out = self.linear2(self.dropout(F.relu(self.linear1(src_q))))
-        # 残差连接
-        src_q = src_q + self.dropout(ffn_out)
+        # 2. 动态生成门控权重
+        # 使用 src_q 的全局平均池化特征作为门控网络的输入
+        global_src_q = src_q_permuted.mean(dim=0)  # (Batch, Dim)
+        gate_logits = self.gate_generator(global_src_q)  # (Batch, 3)
+        # 使用 Softmax 使门控权重和为1，实现动态分配
+        gate_weights = F.softmax(gate_logits, dim=-1)  # (Batch, 3)
+
+        # 提取并重塑每个门控权重以进行广播
+        g_self = gate_weights[:, 0].unsqueeze(0).unsqueeze(-1)   # (1, Batch, 1)
+        g_cross = gate_weights[:, 1].unsqueeze(0).unsqueeze(-1)  # (1, Batch, 1)
+        g_quest = gate_weights[:, 2].unsqueeze(0).unsqueeze(-1)  # (1, Batch, 1)
+
+        # 3. 门控融合与残差连接
+        # 使用门控权重加权三种注意力的输出，然后与原始 src_q 相加
+        src_q_updated = src_q_permuted + \
+                        g_self * self.dropout(slf_attn_out) + \
+                        g_cross * self.dropout(crs_attn_out) + \
+                        g_quest * self.dropout(qst_attn_out)
+        
+        # 第一个层归一化
+        src_q_updated = self.norm1(src_q_updated)
+
+        # 4. 前馈网络
+        ffn_out = self.linear2(self.dropout(F.relu(self.linear1(src_q_updated))))
+        # 第二个残差连接
+        src_q_final = src_q_updated + self.dropout(ffn_out)
         # 第二个层归一化
-        src_q = self.norm2(src_q)
+        src_q_final = self.norm2(src_q_final)
+        
         # 维度置换回 (Batch, Seq_q, Dim)
-        return src_q.permute(1, 0, 2), weight  # 返回更新后的 src_q 和问句注意力权重
+        return src_q_final.permute(1, 0, 2), weight  # 返回更新后的 src_q 和问句注意力权重
 
     def forward(self,
                 src_q: Tensor,  # 第一个模态特征 (例如音频)
@@ -849,3 +1002,20 @@ class TSPM_topKSelection(nn.Module):
         output_audio, output_patches = self.SelectTopK(temp_weights, audio_input, visual_input, patch_inputs, B, C)
 
         return output_audio, output_patches
+    
+
+
+
+class TokenDimensionReducer(nn.Module):
+    def __init__(self, input_tokens=196, output_tokens=49, feature_dim=1152):
+        super().__init__()
+        self.adaptive_pool = nn.AdaptiveAvgPool1d(output_tokens)
+        self.norm = nn.LayerNorm(feature_dim)
+        
+    def forward(self, x):
+        B, T, P, D = x.shape
+        x = x.reshape(B * T, P, D).transpose(1, 2)  # [B*T, D, P]
+        x = self.adaptive_pool(x).transpose(1, 2)    # [B*T, output_tokens, D]
+        x = self.norm(x)
+        return x.reshape(B, T, -1, D)  
+

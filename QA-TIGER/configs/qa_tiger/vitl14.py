@@ -7,7 +7,7 @@ config = dict(
     output_dir='/mnt/sda/shenhao/code/AVQA/QA-TIGER/qa-tiger_clip_vitl14@336px',
     weight='/mnt/sda/shenhao/code/AVQA/QA-TIGER/qa-tiger_clip_vitl14@336px/2025-06-18-12-34-16_seed713/best.pt',
     pretrained_weight="base",
-    use_ams=True,
+    use_ams=False,
     mccd=dict(
         flag=True,
         batch_size=64,
@@ -22,14 +22,14 @@ config = dict(
         ),
         loss_weight=dict(
             major_loss_weight=1,
-            distribution_loss_weight=0.2,     # 0.01
-            euclidean_distance_fusion_q_weight=0.1,
-            euclidean_distance_fusion_a_weight=0.5,
-            euclidean_distance_fusion_v_weight=0.5,
+            distribution_loss_weight=0.1,     # 0.01
+            euclidean_distance_fusion_q_weight=0.2,
+            euclidean_distance_fusion_a_weight=0.4,
+            euclidean_distance_fusion_v_weight=0.4,
             cycle_Kl_loss_weight=0.333,
             cycle_KL_a_q_weight=0.233,
-            cycle_KL_q_v_weight=0.533,
-            cycle_KL_v_a_weight=0.233,
+            cycle_KL_q_v_weight=0.233,
+            cycle_KL_v_a_weight=0.533,
         ),
         mlp=dict(
             input_dim=512,
@@ -42,8 +42,8 @@ config = dict(
     data=dict(
         root='./data',
         img_size=336,
-        batch_size=32,
-        eval_batch_size=32,
+        batch_size=8,
+        eval_batch_size=8,
         num_workers=16,
         frame_sample_rate=1,
         audios_dir='/mnt/sda/shenhao/datasets/MUSIC-AVQA/audio',
@@ -59,15 +59,15 @@ config = dict(
         # (60, 128)
         audio_feat='/mnt/sda/shenhao/datasets/MUSIC-AVQA/feats/qa_tiger/audit_feat/60vggish/',
         # (60, 768)
-        # video_feat='/mnt/sda/shenhao/datasets/MUSIC-AVQA/feats/qa_tiger/clip_feat/',
+        video_feat='/mnt/sda/shenhao/datasets/MUSIC-AVQA/feats/qa_tiger/clip_feat/',
         # (60, 14, 1024)
-        patch_feat='/mnt/sda/shenhao/datasets/MUSIC-AVQA/feats/qa_tiger/tome_feat/',
+        patch_feat='/mnt/sda/shenhao/datasets/MUSIC-AVQA/feats/qa_tiger/clip_merge/',
 
         # audio_feat='/mnt/sda/shenhao/datasets/MUSIC-AVQA/feats/qa_tiger/audit_feat/60vggish/',
         # (60, 1152)
-        video_feat='/mnt/sda/shenhao/datasets/siglip/MUSIC-AVQA/global_features/',    
-        # (60, 729, 1152)
-        # patch_feat='/mnt/sda/shenhao/datasets/siglip/MUSIC-AVQA/patch_features/',
+        # video_feat='/mnt/sda/shenhao/datasets/siglip2/MUSIC-AVQA/global_features/',
+        # (60, 196, 1152)
+        # patch_feat='/mnt/sda/shenhao/datasets/siglip2/MUSIC-AVQA/patch_features/',
 
         prompt_feat=None,
     ),
@@ -77,15 +77,16 @@ config = dict(
         model_type="QA-TIGER_ViTL14@336px",
         model=dict(
             d_model=512,
-            video_dim=1152,
+            video_dim=768,
             patch_dim=1024,
             quest_dim=512,
             audio_dim=128,
             topK=7,
             num_experts=7,
             # encoder_type='ViT-L/14@336px',
-            encoder_type='google/siglip-so400m-patch14-384',
-            mccd_flag=True,
+            encoder_type='openai/clip-vit-large-patch14',
+            # encoder_type='google/siglip2-so400m-patch14-384',
+            mccd_flag=False,
             lambda_multifaceted=0.001,
         ),
         optim=dict(

@@ -8,7 +8,7 @@ import math
 import ast
 
 from transformers import StoppingCriteria
-from constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN
+from .constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN
 
 
 def select_best_resolution(original_size, possible_resolutions):

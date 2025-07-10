@@ -13,9 +13,12 @@ from torchvision import transforms
 from transformers import AutoTokenizer
 from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 
+import logging
+
 from src.models.clip import tokenize
 from src.prompt_matcher import match_prompt
 from src.models.vggish import wavfile_to_examples
+logger = logging.getLogger(name="AVQA")
 
 qtype2idx = {
     'Audio': {'Counting': 0, 'Comparative': 1},
@@ -53,8 +56,11 @@ class AVQA_dataset(Dataset):
 
         # self.tokenizer = tokenize
         # self.bert_tokenizer = AutoTokenizer.from_pretrained('google-bert/bert-base-uncased')
-        self.tokenizer = AutoTokenizer.from_pretrained('google/siglip-so400m-patch14-384',
-                                                       cache_dir='/mnt/sda/shenhao/models')
+        self.tokenizer = AutoTokenizer.from_pretrained('openai/clip-vit-large-patch14', cache_dir='/mnt/sda/shenhao/models')
+        # self.tokenizer = AutoTokenizer.from_pretrained('google/siglip-so400m-patch14-384',  cache_dir='/mnt/sda/shenhao/models')
+        # self.tokenizer = AutoTokenizer.from_pretrained('google/siglip2-so400m-patch14-384',  cache_dir='/mnt/sda/shenhao/models/siglip2')
+        # logger.info(f"Tokenizer: {self.tokenizer}")
+        # logger.info(f"Tokenizer name: {self.tokenizer.__class__.__name__}")
         self.size = config.data.img_size
         self.sample_rate = config.data.frame_sample_rate
 
@@ -107,8 +113,9 @@ class AVQA_dataset(Dataset):
             # clip使用
             # quest = self.tokenizer(question, truncate=True).squeeze()
             # siglip使用
-            quest = self.tokenizer(question, max_length=64, padding='max_length', 
+            quest = self.tokenizer(question, max_length=77, padding='max_length',
                      truncation=True, return_tensors='pt')['input_ids'].squeeze(0)
+
             # prompt = self.tokenizer(sample['qprompt'], truncate=True).squeeze()
 
         # sampling frames
@@ -206,16 +213,16 @@ class AVQA_dataset(Dataset):
                 samples = json.load(f)
             for sample in tqdm(samples):
                 # clip 使用
-                # que_tokens = self.tokenizer(
-                #     sample['question_content'].lstrip().rstrip()[:-1]
-                # )
-                # que_len = len(torch.nonzero(que_tokens['input_ids']))
-                # siglip 使用
                 que_tokens = self.tokenizer(
-                    sample['question_content'].lstrip().rstrip()[:-1],
-                    return_tensors='pt'
+                    sample['question_content'].lstrip().rstrip()[:-1]
                 )
                 que_len = len(torch.nonzero(que_tokens['input_ids']))
+                # siglip 使用
+                # que_tokens = self.tokenizer(
+                #     sample['question_content'].lstrip().rstrip()[:-1],
+                #     return_tensors='pt'
+                # )
+                # que_len = len(torch.nonzero(que_tokens['input_ids']))
 
 
                 if max_que_len < que_len:

@@ -271,10 +271,12 @@ def train(cfg: dict,
     epoch_time = time.time()
     for batch_idx, sample in enumerate(train_loader):
         start_time = time.time()
-
+       
         reshaped_data = get_items(sample, device)
         optimizer.zero_grad()
         output = model(reshaped_data)
+        
+
 
         loss = 0
         target = reshaped_data['label']
@@ -293,6 +295,7 @@ def train(cfg: dict,
         losses.append(('total_loss', loss))
         loss.backward()
         optimizer.step()
+      
 
         # 记录训练错误（可选，通常只在验证时记录）
         if error_analyzer is not None and cfg.get('record_train_errors', False):

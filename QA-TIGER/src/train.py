@@ -1,5 +1,6 @@
 from __future__ import print_function
 import os
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 import sys
 from pathlib import Path
 import torch  # noqa: E402
