@@ -213,11 +213,10 @@ def positional_encoding(pe, learn_pe, q_len, d_model):
 
 
 class Transformer_Layer(nn.Module):
-    def __init__(self, device, d_model, d_ff, num_nodes, patch_nums, patch_size, dynamic, factorized, layer_number, batch_norm):
+    def __init__(self, device, d_model, d_ff, patch_nums, patch_size, dynamic, factorized, layer_number, batch_norm):
         super(Transformer_Layer, self).__init__()
         self.device = device
         self.d_model = d_model
-        self.num_nodes = num_nodes
         self.dynamic = dynamic
         self.patch_nums = patch_nums
         self.patch_size = patch_size
@@ -230,11 +229,12 @@ class Transformer_Layer(nn.Module):
             nn.Linear(1536, self.d_model)]) for _ in range(self.patch_nums)])
         self.intra_d_model = self.d_model
         self.intra_patch_attention = Intra_Patch_Attention(self.intra_d_model, factorized=factorized)
-        self.weights_generator_distinct = WeightGenerator(self.intra_d_model, self.intra_d_model, mem_dim=16, num_nodes=num_nodes,
+        self.weights_generator_distinct = WeightGenerator(self.intra_d_model, self.intra_d_model, mem_dim=16,
                                                           factorized=factorized, number_of_weights=2)
-        self.weights_generator_shared = WeightGenerator(self.intra_d_model, self.intra_d_model, mem_dim=None, num_nodes=num_nodes,
+        self.weights_generator_shared = WeightGenerator(self.intra_d_model, self.intra_d_model, mem_dim=None,
                                                         factorized=False, number_of_weights=2)
-        self.intra_Linear = nn.Linear(self.patch_nums, self.patch_nums*self.patch_size)
+
+        # self.intra_Linear = nn.Linear(patch_nums * query_length * d_model,  patch_nums * patch_size * d_model  )
 
 
 
@@ -267,8 +267,13 @@ class Transformer_Layer(nn.Module):
                                 nn.Linear(self.d_ff, self.d_model, bias=True))
 
     def forward(self, x, query):
+        # 去掉num_nodes维度后的处理
+        # x: [batch_size, temporal_length, d_model]
+        # query: [batch_size, query_length, 1536]
 
-        new_x  = x
+        new_x = x
+        print(f"Input x shape: {x.shape}")
+        print(f"Input query shape: {query.shape}")
         batch_size = x.size(0)
         intra_out_concat = None
 
@@ -277,49 +282,81 @@ class Transformer_Layer(nn.Module):
 
         ####intra Attention#####
         for i in range(self.patch_nums):
-            t = x[:, i * self.patch_size:(i + 1) * self.patch_size, :, :]
-
-            intra_emb = self.embeddings_generator[i](query).expand(batch_size, -1, -1,  -1)
-            t = torch.cat([intra_emb, t], dim=1)
+            # 提取patch: [batch_size, patch_size, d_model]
+            t = x[:, i * self.patch_size:(i + 1) * self.patch_size, :]
+            # print(f"Patch {i} shape: {t.shape}")
+            # query embedding: [batch_size, query_length, d_model]
+            intra_emb = self.embeddings_generator[i](query)
+            # print(f"Intra embedding shape for patch {i}: {intra_emb.shape}")
+            # 拼接: [batch_size, query_length + patch_size, d_model]
+            # t = torch.cat([intra_emb, t], dim=1)
+            # print(f"Concatenated shape for patch {i}: {t.shape}")
             out, attention = self.intra_patch_attention(intra_emb, t, t, weights_distinct, biases_distinct, weights_shared,
                                                biases_shared)
-
-            if intra_out_concat == None:
+            # print(f"Output shape for patch {i}: {out.shape}")
+            if intra_out_concat is None:
                 intra_out_concat = out
-
             else:
                 intra_out_concat = torch.cat([intra_out_concat, out], dim=1)
 
-        intra_out_concat = intra_out_concat.permute(0,3,2,1)
-        intra_out_concat = self.intra_Linear(intra_out_concat)
-        intra_out_concat = intra_out_concat.permute(0,3,2,1)
+            # print(f"intra_out_concat shape for patch {i}: {intra_out_concat.shape}")
 
+        # 重新组织intra_out_concat的维度
+        # 当前: intra_out_concat [batch_size, patch_nums * query_length, d_model]
+        # 需要: [batch_size, patch_nums * patch_size, d_model]
+        
+        # 将intra_out_concat重新reshape为每个patch的输出
+        print(f" intra_out_concat.size: {intra_out_concat.size(1)}")
+        query_length = intra_out_concat.size(1) // self.patch_nums  # 每个patch的query长度
+        print(f"patcnh_nums: {self.patch_nums}, patch_size: {self.patch_size}")
+        print(f"Query length for intra attention: {query_length}")
+        intra_out_concat = intra_out_concat.view(batch_size, self.patch_nums, query_length, self.d_model)
+        print(f"Reshaped intra_out_concat: {intra_out_concat.shape}")
+        # 如果query_length != patch_size，需要调整
+        # if query_length != self.patch_size:
+        #     # 使用插值或截断来匹配patch_size
+        #     if query_length > self.patch_size:
+        #         # 截断
+        #         intra_out_concat = intra_out_concat[:, :, :self.patch_size, :]
+        #     else:
+        #         # 填充
+        #         padding = self.patch_size - query_length
+        #         intra_out_concat = torch.nn.functional.pad(intra_out_concat, (0, 0, 0, padding))
 
+        # 重新组织为 [batch_size, patch_nums * patch_size, d_model]
+        # intra_out_concat = intra_out_concat.view(batch_size, self.patch_nums * self.patch_size, self.d_model)
 
         ####inter Attention######
-        x = x.unfold(dimension=1, size=self.patch_size, step=self.stride)  # [b x patch_num x nvar x dim x patch_len]
-        x = x.permute(0, 2, 1, 3, 4)  # [b x nvar x patch_num x dim x patch_len ]
-        b, nvar, patch_num, dim, patch_len = x.shape
+        # 重新使用原始x进行inter attention
+        print(f"New x shape before unfold: {new_x.shape}")
+        x_inter = new_x.unfold(dimension=1, size=self.patch_size, step=self.stride)  # [b x patch_num x d_model x patch_len]
+        b, patch_num, dim, patch_len = x_inter.shape
+        print(f"x_inter shape after unfold: {x_inter.shape}")
+        # 重组为 [batch_size, patch_num, d_model * patch_len]
+        x_inter = x_inter.reshape(b, patch_num, dim * patch_len)
+        print(f"x_inter shape after reshape: {x_inter.shape}")
+        x_inter = self.emb_linear(x_inter)
+        x_inter = self.dropout(x_inter + self.W_pos)
+        print(f"x_inter shape after dropout: {x_inter.shape}")
+        inter_out, attention = self.inter_patch_attention(Q=x_inter, K=x_inter, V=x_inter)  # [b, patch_num, inter_d_model]
+        
+        # 重组回原始形状: [batch_size, patch_nums * patch_size, d_model]
+        inter_out = inter_out.reshape(b, patch_num, self.patch_size, self.d_model)
+        inter_out = inter_out.reshape(b, patch_num * self.patch_size, self.d_model)
+        print(f"inter_out shape after final reshape: {inter_out.shape}")
+        # out = new_x + intra_out_concat + inter_out
+        out = new_x  + inter_out
 
-        x = torch.reshape(x, (
-        x.shape[0] * x.shape[1], x.shape[2], x.shape[3] * x.shape[-1]))  # [b*nvar, patch_num, dim*patch_len]
-
-        x = self.emb_linear(x)
-        x = self.dropout(x + self.W_pos)
-
-        inter_out, attention = self.inter_patch_attention(Q=x, K=x, V=x)  # [b*nvar, patch_num, dim]
-        inter_out = torch.reshape(inter_out, (b, nvar, inter_out.shape[-2], inter_out.shape[-1]))
-        inter_out = torch.reshape(inter_out, (b, nvar, inter_out.shape[-2], self.patch_size, self.d_model))
-        inter_out = torch.reshape(inter_out, (b, self.patch_size*self.patch_nums, nvar, self.d_model)) #[b, temporal, nvar, dim]
-
-        out = new_x + intra_out_concat + inter_out
         if self.batch_norm:
-            out = self.norm_attn(out.reshape(b*nvar, self.patch_size*self.patch_nums, self.d_model))
+            out = self.norm_attn(out)
+        
         ##FFN
         out = self.dropout(out)
         out = self.ff(out) + out
+        
         if self.batch_norm:
-            out = self.norm_ffn(out).reshape(b, self.patch_size*self.patch_nums, nvar, self.d_model)
+            out = self.norm_ffn(out)
+            
         return out, attention
 
 
@@ -329,11 +366,13 @@ class CustomLinear(nn.Module):
         super(CustomLinear, self).__init__()
         self.factorized = factorized
 
-    def forward(self, input, weights, biases):
-        if self.factorized:
-            return torch.matmul(input.unsqueeze(3), weights).squeeze(3) + biases
-        else:
-            return torch.matmul(input, weights) + biases
+    def forward(self, input, weight, bias):
+        # 去掉num_nodes维度后的处理
+        # input: [batch_size, seq_length, d_model]
+        # weight: [d_model, d_model] 权重张量
+        # bias: [d_model] 偏置张量
+        
+        return torch.matmul(input, weight) + bias
 
 
 class Intra_Patch_Attention(nn.Module):
@@ -348,35 +387,44 @@ class Intra_Patch_Attention(nn.Module):
         self.custom_linear = CustomLinear(factorized)
 
     def forward(self, query, key, value, weights_distinct, biases_distinct, weights_shared, biases_shared):
+        # 去掉num_nodes维度后的处理
+        # query: [batch_size, query_length, d_model]
+        # key/value: [batch_size, key_length, d_model]
+        
         batch_size = query.shape[0]
 
+        # 权重变换
         key = self.custom_linear(key, weights_distinct[0], biases_distinct[0])
         value = self.custom_linear(value, weights_distinct[1], biases_distinct[1])
-        query = torch.cat(torch.split(query, self.head_size, dim=-1), dim=0)
-        key = torch.cat(torch.split(key, self.head_size, dim=-1), dim=0)
-        value = torch.cat(torch.split(value, self.head_size, dim=-1), dim=0)
+        
+        # 多头分割
+        query = torch.cat(torch.split(query, self.head_size, dim=-1), dim=0)  # [batch_size * heads, query_length, head_size]
+        key = torch.cat(torch.split(key, self.head_size, dim=-1), dim=0)      # [batch_size * heads, key_length, head_size]
+        value = torch.cat(torch.split(value, self.head_size, dim=-1), dim=0)  # [batch_size * heads, key_length, head_size]
 
-        query = query.permute((0, 2, 1, 3))
-        key = key.permute((0, 2, 3, 1))
-        value = value.permute((0, 2, 1, 3))
+        # 调整维度用于注意力计算
+        # query: [batch_size * heads, query_length, head_size]
+        # key: [batch_size * heads, head_size, key_length] 
+        # value: [batch_size * heads, key_length, head_size]
+        key = key.transpose(-2, -1)  # [batch_size * heads, head_size, key_length]
 
-
-
-        attention = torch.matmul(query, key)
+        # 注意力计算
+        attention = torch.matmul(query, key)  # [batch_size * heads, query_length, key_length]
         attention /= (self.head_size ** 0.5)
-
         attention = torch.softmax(attention, dim=-1)
 
-        x = torch.matmul(attention, value)
-        x = x.permute((0, 2, 1, 3))
-        x = torch.cat(torch.split(x, batch_size, dim=0), dim=-1)
+        # 加权求和
+        x = torch.matmul(attention, value)  # [batch_size * heads, query_length, head_size]
+        
+        # 合并多头
+        x = torch.cat(torch.split(x, batch_size, dim=0), dim=-1)  # [batch_size, query_length, d_model]
 
-        if x.shape[0] == 0:
-            x = x.repeat(1, 1, 1, int(weights_shared[0].shape[-1] / x.shape[-1]))
-
+        # 后续处理
+        # weights_shared和biases_shared是列表，包含多个权重
         x = self.custom_linear(x, weights_shared[0], biases_shared[0])
         x = torch.relu(x)
         x = self.custom_linear(x, weights_shared[1], biases_shared[1])
+        
         return x, attention
 
 
@@ -472,18 +520,17 @@ class ScaledDotProductAttention(nn.Module):
 
 
 class WeightGenerator(nn.Module):
-    def __init__(self, in_dim, out_dim, mem_dim, num_nodes, factorized, number_of_weights=4):
+    def __init__(self, in_dim, out_dim, mem_dim, factorized, number_of_weights=4):
         super(WeightGenerator, self).__init__()
-        #print('FACTORIZED {}'.format(factorized))
         self.number_of_weights = number_of_weights
         self.mem_dim = mem_dim
-        self.num_nodes = num_nodes
         self.factorized = factorized
         self.out_dim = out_dim
+        
         if self.factorized:
-            self.memory = nn.Parameter(torch.randn(num_nodes, mem_dim), requires_grad=True).to('cpu')
-            # self.memory = nn.Parameter(torch.randn(num_nodes, mem_dim), requires_grad=True).to('cuda:0')
-            self.generator = self.generator = nn.Sequential(*[
+            # 单节点处理，去掉num_nodes维度
+            self.memory = nn.Parameter(torch.randn(mem_dim), requires_grad=True)
+            self.generator = nn.Sequential(*[
                 nn.Linear(mem_dim, 64),
                 nn.Tanh(),
                 nn.Linear(64, 64),
@@ -505,7 +552,7 @@ class WeightGenerator(nn.Module):
             self.P = nn.ParameterList(
                 [nn.Parameter(torch.Tensor(in_dim, out_dim), requires_grad=True) for _ in range(number_of_weights)])
             self.B = nn.ParameterList(
-                [nn.Parameter(torch.Tensor(1, out_dim), requires_grad=True) for _ in range(number_of_weights)])
+                [nn.Parameter(torch.Tensor(out_dim), requires_grad=True) for _ in range(number_of_weights)])
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -522,10 +569,11 @@ class WeightGenerator(nn.Module):
 
     def forward(self):
         if self.factorized:
-            memory = self.generator(self.memory.unsqueeze(1))
-            bias = [torch.matmul(memory, self.B[i]).squeeze(1) for i in range(self.number_of_weights)]
-            memory = memory.view(self.num_nodes, self.mem_dim, self.mem_dim)
-            weights = [torch.matmul(torch.matmul(self.P[i], memory), self.Q[i]) for i in range(self.number_of_weights)]
+            # 单节点处理
+            memory = self.generator(self.memory.unsqueeze(0))  # [1, 100]
+            bias = [torch.matmul(memory, self.B[i]).squeeze(0) for i in range(self.number_of_weights)]  # [out_dim]
+            memory = memory.view(self.mem_dim, self.mem_dim)  # [mem_dim, mem_dim]
+            weights = [torch.matmul(torch.matmul(self.P[i], memory), self.Q[i]) for i in range(self.number_of_weights)]  # [in_dim, out_dim]
             return weights, bias
         else:
             return self.P, self.B

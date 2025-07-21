@@ -33,8 +33,8 @@ class SparseDispatcher(object):
         # apply exp to expert outputs, so we are not longer in log space
         stitched = torch.cat(expert_out, 0).exp()
         if multiply_by_gates:
-            stitched = torch.einsum("ijkh,ik -> ijkh", stitched, self._nonzero_gates)
-        zeros = torch.zeros(self._gates.size(0), expert_out[-1].size(1), expert_out[-1].size(2), expert_out[-1].size(3),
+            stitched = torch.einsum("ijk,ik -> ijk", stitched, self._nonzero_gates)
+        zeros = torch.zeros(self._gates.size(0), expert_out[-1].size(1), expert_out[-1].size(2),
                             requires_grad=True, device=stitched.device)
         # combine samples that have been processed by the same k experts
         combined = zeros.index_add(0, self._batch_index, stitched.float())
