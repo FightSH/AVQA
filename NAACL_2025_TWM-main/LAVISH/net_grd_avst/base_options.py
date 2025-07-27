@@ -25,13 +25,13 @@ class BaseOptions():
 			"--video_res14x14_dir", type=str, default='', help="res14x14 dir")
 		
 		self.parser.add_argument(
-			"--label_train", type=str, default="./datasets/avqa/MUSIC_AVQA/balance_full_set/train_balance.json", help="train csv file")
+			"--label_train", type=str, default="/mnt/sda/shenhao/code/AVQA/QA-TIGER/data/annots/music_avqa/music_avqa_train.json", help="train csv file")
 		self.parser.add_argument(
-			"--label_val", type=str, default="./data/json/avqa-val.json", help="val csv file")
+			"--label_val", type=str, default="/mnt/sda/shenhao/code/AVQA/QA-TIGER/data/annots/music_avqa/music_avqa_val.json", help="val csv file")
 		self.parser.add_argument(
-			"--label_test", type=str, default="./datasets/avqa/MUSIC_AVQA/balance_full_set/test_balance.json", help="test csv file")
+			"--label_test", type=str, default="/mnt/sda/shenhao/code/AVQA/QA-TIGER/data/annots/music_avqa/music_avqa_test.json", help="test csv file")
 		self.parser.add_argument(
-			'--batch-size', type=int, default=32, metavar='N', help='input batch size for training (default: 16)')
+			'--batch-size', type=int, default=2, metavar='N', help='input batch size for training (default: 16)')
 		self.parser.add_argument(
 			'--epochs', type=int, default=10, metavar='N', help='number of epochs to train (default: 60)')
 		self.parser.add_argument(
@@ -49,7 +49,7 @@ class BaseOptions():
 		self.parser.add_argument(
 			"--checkpoint", type=str, default='alvs', help="save model name")
 		self.parser.add_argument(
-			'--gpu', type=str, default='0', help='gpu device number')
+			'--gpu', type=str, default='3', help='gpu device number')
 
 		### for AV-ada ###
 		self.parser.add_argument(
@@ -57,7 +57,7 @@ class BaseOptions():
 
 		
 		self.parser.add_argument('--audio_length', type=float, default= 1, help='audio length')
-		self.parser.add_argument('--num_workers', type=int, default= 8, help='worker for dataloader')
+		self.parser.add_argument('--num_workers', type=int, default= 1, help='worker for dataloader')
 		self.parser.add_argument('--model_name', type=str, default=None, help="for log")
 
 

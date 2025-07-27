@@ -49,7 +49,7 @@ class FixedEmbedding(nn.Module):
         super(FixedEmbedding, self).__init__()
 
         w = torch.zeros(c_in, d_model).float()
-        w.require_grad = False
+        w.requires_grad = False
 
         position = torch.arange(0, c_in).float().unsqueeze(1)
         div_term = (torch.arange(0, d_model, 2).float() * -(math.log(10000.0) / d_model)).exp()
@@ -212,9 +212,9 @@ def positional_encoding(pe, learn_pe, q_len, d_model):
     return nn.Parameter(W_pos, requires_grad=learn_pe)
 
 
-class Transformer_Layer(nn.Module):
+class TransformerLayer(nn.Module):
     def __init__(self, device, d_model, d_ff, patch_nums, patch_size, dynamic, factorized, layer_number, batch_norm):
-        super(Transformer_Layer, self).__init__()
+        super(TransformerLayer, self).__init__()
         self.device = device
         self.d_model = d_model
         self.dynamic = dynamic
@@ -226,7 +226,7 @@ class Transformer_Layer(nn.Module):
 
         ##intra_patch_attention
         self.embeddings_generator = nn.ModuleList([nn.Sequential(*[
-            nn.Linear(1536, self.d_model)]) for _ in range(self.patch_nums)])
+            nn.Linear(512, self.d_model)]) for _ in range(self.patch_nums)])
         self.intra_d_model = self.d_model
         self.intra_patch_attention = Intra_Patch_Attention(self.intra_d_model, factorized=factorized)
         self.weights_generator_distinct = WeightGenerator(self.intra_d_model, self.intra_d_model, mem_dim=16,
@@ -234,7 +234,13 @@ class Transformer_Layer(nn.Module):
         self.weights_generator_shared = WeightGenerator(self.intra_d_model, self.intra_d_model, mem_dim=None,
                                                         factorized=False, number_of_weights=2)
 
-        # self.intra_Linear = nn.Linear(patch_nums * query_length * d_model,  patch_nums * patch_size * d_model  )
+        # 添加线性层来调整intra attention输出的维度
+        # self.intra_projection = nn.Linear(self.d_model, self.d_model)
+        # 添加可学习的序列长度变换层
+        # self.sequence_adapter = nn.ModuleDict({
+        #     'compress': nn.Linear(self.d_model, self.d_model),  # 用于压缩长序列
+        #     'expand': nn.Linear(self.d_model, self.d_model),    # 用于扩展短序列
+        # })
 
 
 
@@ -272,8 +278,8 @@ class Transformer_Layer(nn.Module):
         # query: [batch_size, query_length, 1536]
 
         new_x = x
-        print(f"Input x shape: {x.shape}")
-        print(f"Input query shape: {query.shape}")
+        # print(f"Input x shape: {x.shape}")
+        # print(f"Input query shape: {query.shape}")
         batch_size = x.size(0)
         intra_out_concat = None
 
@@ -287,12 +293,15 @@ class Transformer_Layer(nn.Module):
             # print(f"Patch {i} shape: {t.shape}")
             # query embedding: [batch_size, query_length, d_model]
             intra_emb = self.embeddings_generator[i](query)
+            intra_emb = torch.cat([intra_emb, t], dim=1)
             # print(f"Intra embedding shape for patch {i}: {intra_emb.shape}")
             # 拼接: [batch_size, query_length + patch_size, d_model]
             # t = torch.cat([intra_emb, t], dim=1)
             # print(f"Concatenated shape for patch {i}: {t.shape}")
-            out, attention = self.intra_patch_attention(intra_emb, t, t, weights_distinct, biases_distinct, weights_shared,
-                                               biases_shared)
+
+
+            # out, attention = self.intra_patch_attention(intra_emb, t, t, weights_distinct, biases_distinct, weights_shared,biases_shared)
+            out, attention = self.intra_patch_attention(t, intra_emb, intra_emb, weights_distinct, biases_distinct, weights_shared,biases_shared)
             # print(f"Output shape for patch {i}: {out.shape}")
             if intra_out_concat is None:
                 intra_out_concat = out
@@ -306,46 +315,67 @@ class Transformer_Layer(nn.Module):
         # 需要: [batch_size, patch_nums * patch_size, d_model]
         
         # 将intra_out_concat重新reshape为每个patch的输出
-        print(f" intra_out_concat.size: {intra_out_concat.size(1)}")
+        # print(f"intra_out_concat.size: {intra_out_concat.size(1)}")
         query_length = intra_out_concat.size(1) // self.patch_nums  # 每个patch的query长度
-        print(f"patcnh_nums: {self.patch_nums}, patch_size: {self.patch_size}")
-        print(f"Query length for intra attention: {query_length}")
+        # print(f"patcnh_nums: {self.patch_nums}, patch_size: {self.patch_size}")
+        # print(f"Query length for intra attention: {query_length}")
         intra_out_concat = intra_out_concat.view(batch_size, self.patch_nums, query_length, self.d_model)
-        print(f"Reshaped intra_out_concat: {intra_out_concat.shape}")
-        # 如果query_length != patch_size，需要调整
+        # print(f"Reshaped intra_out_concat: {intra_out_concat.shape}")
+        # 处理query_length和patch_size不匹配的问题
         # if query_length != self.patch_size:
-        #     # 使用插值或截断来匹配patch_size
         #     if query_length > self.patch_size:
-        #         # 截断
-        #         intra_out_concat = intra_out_concat[:, :, :self.patch_size, :]
-        #     else:
-        #         # 填充
-        #         padding = self.patch_size - query_length
-        #         intra_out_concat = torch.nn.functional.pad(intra_out_concat, (0, 0, 0, padding))
-
+        #         # 对每个patch独立进行平均池化，保持特征维度不变
+        #         # 重新组织为 [batch_size * patch_nums, query_length, d_model]
+        #         intra_reshaped = intra_out_concat.view(batch_size * self.patch_nums, query_length, self.d_model)
+        #         # 转置为 [batch_size * patch_nums, d_model, query_length] 用于1D池化
+        #         intra_reshaped = intra_reshaped.transpose(1, 2)
+        #         # 应用自适应平均池化
+        #         intra_pooled = F.adaptive_avg_pool1d(intra_reshaped, self.patch_size)
+        #         # 转置回 [batch_size * patch_nums, patch_size, d_model]
+        #         intra_pooled = intra_pooled.transpose(1, 2)
+        #         # 重新组织为 [batch_size, patch_nums, patch_size, d_model]
+        #         intra_out_concat = intra_pooled.view(batch_size, self.patch_nums, self.patch_size, self.d_model)
+        #     elif query_length < self.patch_size:
+        #         # 对每个patch独立进行线性插值上采样
+        #         # 重新组织为 [batch_size * patch_nums, query_length, d_model]
+        #         intra_reshaped = intra_out_concat.view(batch_size * self.patch_nums, query_length, self.d_model)
+        #         # 转置为 [batch_size * patch_nums, d_model, query_length] 用于1D插值
+        #         intra_reshaped = intra_reshaped.transpose(1, 2)
+        #         # 使用线性插值进行上采样，保持特征的连续性
+        #         intra_upsampled = F.interpolate(intra_reshaped, size=self.patch_size, mode='linear', align_corners=False)
+        #         # 转置回 [batch_size * patch_nums, patch_size, d_model]
+        #         intra_upsampled = intra_upsampled.transpose(1, 2)
+        #         # 重新组织为 [batch_size, patch_nums, patch_size, d_model]
+        #         intra_out_concat = intra_upsampled.view(batch_size, self.patch_nums, self.patch_size, self.d_model)
+        #
+        
         # 重新组织为 [batch_size, patch_nums * patch_size, d_model]
-        # intra_out_concat = intra_out_concat.view(batch_size, self.patch_nums * self.patch_size, self.d_model)
+        intra_out_concat = intra_out_concat.contiguous().view(batch_size, self.patch_nums * self.patch_size, self.d_model)
+        
+        # 应用投影层来确保特征对齐
+        # intra_out_concat = self.intra_projection(intra_out_concat)
 
         ####inter Attention######
         # 重新使用原始x进行inter attention
-        print(f"New x shape before unfold: {new_x.shape}")
+        # print(f"New x shape before unfold: {new_x.shape}")
         x_inter = new_x.unfold(dimension=1, size=self.patch_size, step=self.stride)  # [b x patch_num x d_model x patch_len]
         b, patch_num, dim, patch_len = x_inter.shape
-        print(f"x_inter shape after unfold: {x_inter.shape}")
+        # print(f"x_inter shape after unfold: {x_inter.shape}")
         # 重组为 [batch_size, patch_num, d_model * patch_len]
         x_inter = x_inter.reshape(b, patch_num, dim * patch_len)
-        print(f"x_inter shape after reshape: {x_inter.shape}")
+        # print(f"x_inter shape after reshape: {x_inter.shape}")
         x_inter = self.emb_linear(x_inter)
         x_inter = self.dropout(x_inter + self.W_pos)
-        print(f"x_inter shape after dropout: {x_inter.shape}")
+        # print(f"x_inter shape after dropout: {x_inter.shape}")
         inter_out, attention = self.inter_patch_attention(Q=x_inter, K=x_inter, V=x_inter)  # [b, patch_num, inter_d_model]
         
         # 重组回原始形状: [batch_size, patch_nums * patch_size, d_model]
         inter_out = inter_out.reshape(b, patch_num, self.patch_size, self.d_model)
         inter_out = inter_out.reshape(b, patch_num * self.patch_size, self.d_model)
-        print(f"inter_out shape after final reshape: {inter_out.shape}")
-        # out = new_x + intra_out_concat + inter_out
-        out = new_x  + inter_out
+        # print(f"inter_out shape after final reshape: {inter_out.shape}")
+        # 现在可以将intra和inter attention的输出都加回到原始输入
+        # print(f"Final shapes - new_x: {new_x.shape}, intra_out_concat: {intra_out_concat.shape}, inter_out: {inter_out.shape}")
+        out = new_x + intra_out_concat + inter_out
 
         if self.batch_norm:
             out = self.norm_attn(out)

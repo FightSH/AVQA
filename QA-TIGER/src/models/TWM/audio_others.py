@@ -13,13 +13,31 @@ class SparseDispatcher(object):
 
         self._gates = gates
         self._num_experts = num_experts
+        # print(f"num_experts: {num_experts}, gates shape: {gates.shape}")
+        # print(f"gates content: {gates}")
+
+        # # 处理NaN值，将其替换为0
+        # if torch.isnan(gates).any() or torch.isinf(gates).any():
+        #     print(f"Warning: gates in SparseDispatcher contains NaN or Inf values!")
+        #     gates = torch.nan_to_num(gates, nan=0.0, posinf=1e-6, neginf=1e-6)
+        #     self._gates = gates
 
         # sort experts
         sorted_experts, index_sorted_experts = torch.nonzero(gates).sort(0)
+        # print(f"sorted_experts shape: {sorted_experts.shape}, index_sorted_experts shape: {index_sorted_experts.shape}")
         _, self._expert_index = sorted_experts.split(1, dim=1)
         # get according batch index for each expert
         self._batch_index = torch.nonzero(gates)[index_sorted_experts[:, 1], 0]
+        # print(f"_batch_index shape: {self._batch_index.shape}, _batch_index: {self._batch_index}")
         self._part_sizes = (gates > 0).sum(0).tolist()
+        # print(f"_part_sizes: {self._part_sizes}")
+        
+        # # 确保_part_sizes至少有一个非零元素，避免全部为0的情况
+        # if all(size == 0 for size in self._part_sizes):
+        #     print(f"Warning: All part sizes are zero, setting first expert to handle all inputs!")
+        #     # 将所有输入分配给第一个专家
+        #     self._part_sizes[0] = gates.shape[0]
+            
         gates_exp = gates[self._batch_index.flatten()]
         self._nonzero_gates = torch.gather(gates_exp, 1, self._expert_index)
 
@@ -27,14 +45,71 @@ class SparseDispatcher(object):
         # assigns samples to experts whose gate is nonzero
         # expand according to batch index so we can just split by _part_sizes
         inp_exp = inp[self._batch_index].squeeze(1)
-        return torch.split(inp_exp, self._part_sizes, dim=0)
+        
+        # 确保_part_sizes不全为0
+        if all(size == 0 for size in self._part_sizes):
+            print(f"Warning: All part sizes are zero in dispatch, creating dummy split!")
+            # 为每个专家创建空张量
+            empty_tensor = torch.empty(0, inp.size(1), inp.size(2), device=inp.device, dtype=inp.dtype)
+            return [empty_tensor for _ in range(self._num_experts)]
+        
+        # 使用torch.split分割输入
+        splits = torch.split(inp_exp, self._part_sizes, dim=0)
+        
+        # 确保返回的列表长度等于专家数量
+        result = []
+        split_idx = 0
+        for i, size in enumerate(self._part_sizes):
+            if size > 0:
+                result.append(splits[split_idx])
+                split_idx += 1
+            else:
+                # 为没有输入的专家创建空张量
+                empty_tensor = torch.empty(0, inp.size(1), inp.size(2), device=inp.device, dtype=inp.dtype)
+                result.append(empty_tensor)
+        
+        return result
 
     def combine(self, expert_out, multiply_by_gates=True):
         # apply exp to expert outputs, so we are not longer in log space
-        stitched = torch.cat(expert_out, 0).exp()
+        
+        # 过滤掉空的专家输出
+        non_empty_outputs = [out for out in expert_out if out.size(0) > 0]
+        
+        # 处理所有专家都没有输出的特殊情况
+        if len(non_empty_outputs) == 0:
+            print(f"Warning: All expert outputs are empty!")
+            # 创建一个与原始gates大小匹配的零输出
+            if len(expert_out) > 0:
+                sample_output = expert_out[0]
+                zeros = torch.zeros(self._gates.size(0), sample_output.size(1), sample_output.size(2),
+                                    requires_grad=True, device=sample_output.device)
+            else:
+                # 如果连expert_out都是空的，使用gates的设备
+                zeros = torch.zeros(self._gates.size(0), 1, 1,
+                                    requires_grad=True, device=self._gates.device)
+            zeros[zeros == 0] = np.finfo(float).eps
+            return zeros.log()
+        
+        # 处理特殊情况：只有一个专家且_part_sizes可能全为0
+        if len(non_empty_outputs) == 1 and hasattr(self, '_part_sizes') and all(size == 0 for size in self._part_sizes):
+            print(f"Warning: Handling special case in combine with one expert!")
+            # 直接返回该专家的输出，扩展到原始batch大小
+            output = non_empty_outputs[0].exp()
+            # 创建一个与原始gates大小匹配的输出
+            zeros = torch.zeros(self._gates.size(0), output.size(1), output.size(2),
+                                requires_grad=True, device=output.device)
+            # 将输出复制到对应位置
+            zeros[:output.size(0)] = output
+            return zeros.log()
+            
+        stitched = torch.cat(non_empty_outputs, 0).exp()
         if multiply_by_gates:
             stitched = torch.einsum("ijk,ik -> ijk", stitched, self._nonzero_gates)
-        zeros = torch.zeros(self._gates.size(0), expert_out[-1].size(1), expert_out[-1].size(2),
+        
+        # 使用第一个非空输出来确定输出形状
+        sample_output = non_empty_outputs[0]
+        zeros = torch.zeros(self._gates.size(0), sample_output.size(1), sample_output.size(2),
                             requires_grad=True, device=stitched.device)
         # combine samples that have been processed by the same k experts
         combined = zeros.index_add(0, self._batch_index, stitched.float())

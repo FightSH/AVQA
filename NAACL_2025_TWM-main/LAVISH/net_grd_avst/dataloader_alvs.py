@@ -37,7 +37,7 @@ class AVQA_dataset(Dataset):
 
     def __init__(self, label, audio_dir, video_res14x14_dir, transform=None, mode_flag='train'):
         samples = json.load(
-            open('./datasets/avqa/MUSIC_AVQA/balance_full_set/train_balance.json', 'r'))
+            open('/mnt/sda/shenhao/code/AVQA/QA-TIGER/data/annots/music_avqa/music_avqa_train.json', 'r'))
 
         # nax =  nne
         ques_vocab = ['<pad>']
@@ -65,7 +65,7 @@ class AVQA_dataset(Dataset):
         self.word_to_ix = {word: i for i, word in enumerate(self.ques_vocab)}
 
         self.samples = json.load(
-            open('./datasets/avqa/MUSIC_AVQA/balance_full_set/train_balance.json', 'r'))
+            open('/mnt/sda/shenhao/code/AVQA/QA-TIGER/data/annots/music_avqa/music_avqa_train.json', 'r'))
         self.max_len = 14  # question length
 
         self.audio_dir = audio_dir
@@ -167,35 +167,45 @@ class AVQA_dataset(Dataset):
             return fbank, mix_lambda
 
 
-    def sample_frames_from_video(self, video_path, fps=20):
-        # Load the video
+    def sample_frames_from_video(self, video_path, num_frames=10):
         video_capture = cv2.VideoCapture(video_path)
 
-        video_fps = video_capture.get(cv2.CAP_PROP_FPS)
+        if not video_capture.isOpened():
+            print(f"Warning: Cannot open video file {video_path}")
+            return []
 
-        # Calculate how many frames to skip between each saved frame
-        frame_skip = int(video_fps / fps)
+        total_frames = int(video_capture.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        frame_number = 0
-        saved_frame_number = 0
+        if total_frames < 1:
+            video_capture.release()
+            print(f"Warning: Video file {video_path} has no frames.")
+            return []
 
+
+        frame_indices = np.linspace(0, total_frames - 1, num=num_frames, dtype=int)
         frames = []
-
-        while True:
+        for idx in frame_indices:
+            video_capture.set(cv2.CAP_PROP_POS_FRAMES, idx)
             success, frame = video_capture.read()
-            if not success:
-                break
+            if success:
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                frame_tensor = torch.from_numpy(frame_rgb).float() / 255.0
+                frame_tensor = frame_tensor.permute(2, 0, 1)
+                frames.append(self.my_normalize(frame_tensor))
+            elif len(frames) > 0:
+                frames.append(frames[-1]) # if read fails, append last frame
 
-            # Save the frame if it's the correct one (based on frame skip logic)
-            if frame_number % frame_skip == 0:
-                frames.append(self.my_normalize(frame / 255))
-                saved_frame_number += 1
-
-            frame_number += 1
-
-        # Release the video capture object
         video_capture.release()
-        return frames
+
+        # Final padding to ensure we have exactly num_frames
+        if len(frames) > 0:
+            while len(frames) < num_frames:
+                frames.append(frames[-1])
+        else:
+            print(f"ERROR: Could not read any frames from {video_path}.")
+            return [] 
+
+        return frames[:num_frames]
 
 
 
@@ -204,7 +214,7 @@ class AVQA_dataset(Dataset):
         sample = self.samples[idx]
         name = sample['video_id']
 
-        total_img = self.sample_frames_from_video(os.path.join("./datasets/avqa/MUSIC_AVQA/videos", name))
+        total_img = self.sample_frames_from_video(os.path.join("/mnt/sda/shenhao/datasets/MUSIC-AVQA/videos", name+'.mp4'))
         total_img = torch.stack(total_img)
         ### <---
 
@@ -234,12 +244,12 @@ class AVQA_dataset(Dataset):
         ### ---> loading all audio frames
         total_audio = []
         for audio_sec in range(10):
-            fbank, mix_lambda = self._wav2fbank(os.path.join("./datasets/avqa/MUSIC_AVQA/audio", name + '.wav'),
+            fbank, mix_lambda = self._wav2fbank(os.path.join("/mnt/sda/shenhao/datasets/MUSIC-AVQA/audio", name + '.wav'),
                                                 idx=audio_sec)
             total_audio.append(fbank)
-        total_audio = torch.tensor(total_audio)
+        total_audio = torch.stack(total_audio)
         ### <----
-
+        # print(f"total_img shape:", {total_img.shape})
         sample = {'audio': total_audio, 'visual_posi': total_img, 'question': ques, 'label': label}
         if self.transform:
             sample = self.transform(sample)

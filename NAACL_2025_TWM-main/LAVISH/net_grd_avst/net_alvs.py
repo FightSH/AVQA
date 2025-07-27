@@ -18,21 +18,21 @@ class AVQA_Net(nn.Module):
 
         # ===================================== load pretrained model ===============================================
         ####### concat model
-        pretrained_file = "grounding_gen/models_grounding_gen/main_grounding_gen_best.pt"
+        pretrained_file = "/mnt/sda/shenhao/code/NAACL_2025_TWM/LAVISH/grounding_gen/main_grounding_gen_best.pt"
         checkpoint = torch.load(pretrained_file)
         print("\n-------------- loading pretrained models --------------")
-        model_dict = AVQA_Fusion_Net.state_dict()
-        tmp = ['module.fc_a1.weight', 'module.fc_a1.bias', 'module.fc_a2.weight', 'module.fc_a2.bias',
-               'module.fc_gl.weight', 'module.fc_gl.bias', 'module.fc1.weight', 'module.fc1.bias', 'module.fc2.weight',
-               'module.fc2.bias', 'module.fc3.weight', 'module.fc3.bias', 'module.fc4.weight', 'module.fc4.bias']
-        tmp2 = ['module.fc_a1.weight', 'module.fc_a1.bias', 'module.fc_a2.weight', 'module.fc_a2.bias']
+        model_dict = self.visual_encoder.state_dict()
+        tmp = ['fc_a1.weight', 'fc_a1.bias', 'fc_a2.weight', 'fc_a2.bias',
+               'fc_gl.weight', 'fc_gl.bias', 'fc1.weight', 'fc1.bias', 'fc2.weight',
+               'fc2.bias', 'fc3.weight', 'fc3.bias', 'fc4.weight', 'fc4.bias']
+        tmp2 = ['fc_a1.weight', 'fc_a1.bias', 'fc_a2.weight', 'fc_a2.bias']
         pretrained_dict1 = {k: v for k, v in checkpoint.items() if k in tmp}
         pretrained_dict2 = {str(k).split('.')[0] + '.' + str(k).split('.')[1] + '_pure.' + str(k).split('.')[-1]: v for
                             k, v in checkpoint.items() if k in tmp2}
 
         model_dict.update(pretrained_dict1)  # 利用预训练模型的参数，更新模型
         model_dict.update(pretrained_dict2)  # 利用预训练模型的参数，更新模型
-        AVQA_Fusion_Net.load_state_dict(model_dict)
+        self.visual_encoder.load_state_dict(model_dict)
 
         print("\n-------------- load pretrained models --------------")
 
@@ -53,19 +53,17 @@ class AVQA_Net(nn.Module):
             input question shape:    [B, T]
             input audio shape:       [B, T, C]
             input visual_posi shape: [B, T, C, H, W]
-            input visual_nega shape: [B, T, C, H, W]
         '''
-
+        print(f"audio shape: ", {audio.shape})
+        print(f"visual_posi shape: ", {visual_posi.shape})
+        print(f"question shape: ", {question.shape})
         bs, t, c, h, w = visual_posi.shape
-        # 这行代码是在对音频数据进行形状重组（reshape）操作。
-        # 在原始输入中，audio 的形状是 [B, T, C]，其中：B 是批次大小 (batch size)，T 是时间步长 (time steps)，C 是通道数/特征维度
-        # audio.view(audio.size(0) * audio.size(1), -1) 这个操作将：
-        # 第一个维度：将批次和时间维度相乘合并成一个维度 (B*T)
-        # 第二个维度：使用 -1 参数自动计算，保持总元素数量不变
-        # 这样，audio_re 的形状就变成了 [B*T, C]，将二维序列数据（批次+时间步）展平为一维序列。
+
         audio_re = audio.view(audio.size(0) * audio.size(1), -1)
+        print(f"audio_re shape: {audio_re.shape}")
         bs = visual_posi.size(0)
         f_v, _ = self.visual_encoder(audio, visual_posi)
+        print(f"f_v shape: {f_v.shape}")
         f_v = f_v.squeeze()
         f_v = self.visual_mapping(f_v)
         if self.mode == "visual":

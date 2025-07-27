@@ -5,30 +5,33 @@ import argparse
 from base_options import BaseOptions
 from gpuinfo import GPUInfo
 import os
-
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 args = BaseOptions().parse()
 
 mygpu = GPUInfo.get_info()[0]
 gpu_source = {}
 
-if 'N/A' in mygpu.keys():
-    for info in mygpu['N/A']:
-        if info in gpu_source.keys():
-            gpu_source[info] += 1
-        else:
-            gpu_source[info] = 1
+# if 'N/A' in mygpu.keys():
+#     for info in mygpu['N/A']:
+#         if info in gpu_source.keys():
+#             gpu_source[info] += 1
+#         else:
+#             gpu_source[info] = 1
+#
+# for gpu_id in args.gpu:
+#     gpu_id = str(gpu_id)
+#
+#     if gpu_id not in gpu_source.keys():
+#         print('go gpu:', gpu_id)
+#         os.environ['CUDA_VISIBLE_DEVICES'] = gpu_id
+#         break
+#     elif gpu_source[gpu_id] < 1:
+#         print('go gpu:', gpu_id)
+#         os.environ['CUDA_VISIBLE_DEVICES'] = gpu_id
+#         break
 
-for gpu_id in args.gpu:
-    gpu_id = str(gpu_id)
+os.environ['CUDA_VISIBLE_DEVICES'] = '3'
 
-    if gpu_id not in gpu_source.keys():
-        print('go gpu:', gpu_id)
-        os.environ['CUDA_VISIBLE_DEVICES'] = gpu_id
-        break
-    elif gpu_source[gpu_id] < 1:
-        print('go gpu:', gpu_id)
-        os.environ['CUDA_VISIBLE_DEVICES'] = gpu_id
-        break
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -161,7 +164,7 @@ def train(args, model, train_loader, optimizer, criterion, epoch, mode):
     total_qa = 0
     correct_qa = 0
     for batch_idx, sample in enumerate(train_loader):
-        visual_posi, target, question, wave = sample['visual_posi'].to('cuda'), sample['label'].to('cuda'), sample['question'].to('cuda'), sample['wave'].to('cuda')
+        visual_posi, target, question,wave = sample['visual_posi'].to('cuda'), sample['label'].to('cuda'), sample['question'].to('cuda'), sample['audio'].to('cuda')
 
         optimizer.zero_grad()
         f_v, f_a, f_qst = model(wave, visual_posi, question)
@@ -186,8 +189,8 @@ def train(args, model, train_loader, optimizer, criterion, epoch, mode):
 def main():
     mode = "audio"
     # Training settings
-    if args.wandb:
-        wandb.init(config=args, project="AVQA", name=args.model_name)
+    # if args.wandb:
+    #     wandb.init(config=args, project="AVQA", name=args.model_name)
 
     torch.manual_seed(args.seed)
 
@@ -247,7 +250,7 @@ def main():
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=8, gamma=0.1)
-    criterion = InfoNCELoss()
+    criterion = InfoNCELoss(0.2)
     best_F = 0
     count = 0
     for epoch in range(1, args.epochs + 1):

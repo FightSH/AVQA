@@ -1,6 +1,6 @@
 
 import torch
-from net_encoders import AMS
+from .net_encoders import AMS
 
 def run_ams_demo():
     """
@@ -29,7 +29,7 @@ def run_ams_demo():
     
     # The visual-question query feature dimension
     # Based on Transformer_Layer's embeddings_generator: nn.Linear(1536, self.d_model)
-    vq_feature_dim = 1536
+    vq_feature_dim = 512
 
     # --- 2. Model Initialization ---
     print("\nInitializing AMS model...")
@@ -63,7 +63,7 @@ def run_ams_demo():
 
     # The visual-question query tensor 'v_q' is used by the expert's embedding generator.
     # Shape: (batch_size, vq_feature_dim)
-    dummy_vq_query = torch.randn(batch_size, 10,vq_feature_dim).to(device)
+    dummy_vq_query = torch.randn(batch_size, 60,vq_feature_dim).to(device)
 
     print(f"\nCreated dummy audio input 'x' with shape: {dummy_audio_input.shape}")
     print(f"Created dummy visual-question query 'v_q' with shape: {dummy_vq_query.shape}")

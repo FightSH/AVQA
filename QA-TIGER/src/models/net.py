@@ -7,9 +7,13 @@ import torch.nn.functional as F
 
 from torch import Tensor
 from typing import Dict
-from .MCCD.layer import MCCD_MLP  # 导入MCCD的MLP模块
 
+from .TWM.batch_alvs_inter import iterative_sampling_vectorized
+from .TWM.batch_alvs_inter import iterative_sampling
+from .MCCD.layer import MCCD_MLP  # 导入MCCD的MLP模块
+from .TWM.net_encoders import AMS
 from .encoders import(CLIP_TEncoder,Hug_Clip_TEncoder,SigLIP_TEncoder,SigLIP2_TEncoder)   # 导入CLIP文本编码器
+# from .mamba.modules.mamba_compressor import MambaCompressor
 from .modules import (
     Projection, QstGrounding,  # 导入自定义模块：投影、问题定位
     TempMoE, AVQCrossAttn,  # 导入自定义模块：时序混合专家、音视问交叉注意力
@@ -22,6 +26,7 @@ from .modules import (
 # from .TWM.net_encoders import AMS  # 导入自适应多尺度稀疏混合专家模型
 
 from .PAVE.info_aggregator import PAVEModuleV5
+from .other.other_module import FeatureAdjuster
 
 
 # 定义QA-TIGER模型类，继承自nn.Module
@@ -36,23 +41,27 @@ class QA_TIGER(nn.Module):
                  late_fusion: bool = False,   # 是否使用后期融合策略 (当前模型结构中未直接体现)
                  nce_loss: bool = False,      # 是否使用NCE损失 (当前模型结构中未直接体现)
                  encoder_type: str = 'ViT-L/14@336px', # CLIP文本编码器的类型
+                 use_ams: bool = False,       # 是否使用自适应多尺度稀疏混合专家 (AMS)
+                 use_mamba: bool = False,     # 是否使用mamba模块
                  mccd=None,
                  **kwargs
     ):
         super(QA_TIGER, self).__init__()
 
-        self.nce_loss = nce_loss  # 存储nce_loss标志
-        self.late_fusion = late_fusion  # 存储late_fusion标志
+        self.nce_loss = nce_loss
+        self.late_fusion = late_fusion
         self.mccd = mccd
-        #
+        self.use_ams = use_ams
+        self.use_mamba = use_mamba
+
 
 
         # 定义各种输入特征的投影层，将它们投影到统一的d_model维度
         self.audio_proj = Projection(audio_dim, d_model)  # 音频特征投影
         self.video_proj = Projection(video_dim, d_model)  # 视频特征投影
         self.patch_proj = Projection(patch_dim, d_model)  # Patch特征投影
-        self.words_proj = Projection(video_dim, d_model)  # 词语特征投影 (维度与video_dim一致，可能笔误或特定设计)
-        self.quest_proj = Projection(video_dim, d_model)  # 问题特征投影 (维度与video_dim一致，可能笔误或特定设计)
+        self.words_proj = Projection(video_dim, d_model)  # 词语特征投影
+        self.quest_proj = Projection(video_dim, d_model)  # 问题特征投影
 
         
 
@@ -63,15 +72,14 @@ class QA_TIGER(nn.Module):
             self.quest_encoder = Hug_Clip_TEncoder(encoder_type)
         if encoder_type == 'google/siglip-so400m-patch14-384':
             self.quest_encoder = SigLIP_TEncoder(model_name= encoder_type)
-
         if encoder_type == 'google/siglip2-so400m-patch14-384':
             self.quest_encoder = SigLIP2_TEncoder(model_name= encoder_type)
 
         self.quest_encoder.freeze()  # 冻结文本编码器的参数，不参与训练
 
 
-        self.temporal_aggregator = PAVEModuleV5(input_dim=d_model, output_dim=d_model, embed_dim=512)
-        self.temporal_aggregator2 = PAVEModuleV5(input_dim=d_model, output_dim=d_model, embed_dim=512)
+        # self.temporal_aggregator = PAVEModuleV5(input_dim=d_model, output_dim=d_model, embed_dim=512)
+        # self.temporal_aggregator2 = PAVEModuleV5(input_dim=d_model, output_dim=d_model, embed_dim=512)
         # 没有必要再在这里添加了
         # self.a_attn = AVQCrossAttn(d_model, 8)  # 音频-注意力模块
         # self.v_attn = AVQCrossAttn(d_model, 8)  # 视频-注意力模块
@@ -109,6 +117,23 @@ class QA_TIGER(nn.Module):
             if mccd['bias_learner']['v_bias']:
                 self.v_bias = MCCD_MLP(dimensions=mccd['mlp']['dimensions'])
 
+        # 引入AMS
+        if self.use_ams:
+             self.ams =AMS(
+            input_size=512,
+            output_size=512,
+            seq_lenth=60,
+            num_experts=4,
+            d_model=512,
+            d_ff=64,
+            patch_size=[15, 10, 6, 3],
+            k=4)
+
+        # if use_mamba:
+            # self.video_mamba = MambaCompressor(d_model=512, n_layer=1)
+            # self.patch_mamba = MambaCompressor(d_model=512, n_layer=1)
+
+        # self.feature_adjuster = FeatureAdjuster()
 
 
 
@@ -177,6 +202,9 @@ class QA_TIGER(nn.Module):
        
 
 
+        # audio,video = self.feature_adjuster(audio, video)
+
+
 
         q_bias_logits, a_bias_logits, v_bias_logits = None, None, None
         # MCCD模块
@@ -195,18 +223,43 @@ class QA_TIGER(nn.Module):
 
 
 
-        frame_num = torch.tensor([60], device='cuda:0')
-        fast = audio.unsqueeze(2).unsqueeze(3)
-        video = video.unsqueeze(2) 
-        video = video + self.temporal_aggregator(fast,frame_num=frame_num,chunk_num=60,slow_feats=video)
-        video = video.squeeze(2) 
 
-
-        
-        patch = patch + self.temporal_aggregator2(fast,frame_num=frame_num,chunk_num=60,slow_feats=patch)
+        # frame_num = torch.tensor([60], device='cuda:0')
+        # fast = audio.unsqueeze(2).unsqueeze(3)
+        # video = video.unsqueeze(2)
+        # video = video + self.temporal_aggregator(fast,frame_num=frame_num,chunk_num=60,slow_feats=video)
+        # video = video.squeeze(2)
+        #
+        #
+        #
+        # patch = patch + self.temporal_aggregator2(fast,frame_num=frame_num,chunk_num=60,slow_feats=patch)
         
         # logger.debug(f'patchOr shape: {patchOr.shape}')  # 输出patchOr的形状
         # logger.debug(f'融合后patchOr shape: {fusion_patch.shape}')
+        if self.use_ams:
+            # 打印形状信息以便调试
+            # print(f"video shape: {video.shape}")
+            # print(f"quest shape: {quest.shape}")
+            # print(f"audio shape: {audio.shape}")
+            indices_batch = iterative_sampling(video, quest, 11, 8, 0.8, 0.2, 15)
+            # print(f"indices_batch type: {type(indices_batch)}, length: {len(indices_batch)}")
+            # if len(indices_batch) > 0:
+            #     print(f"indices_batch[0] type: {type(indices_batch[0])}, length: {len(indices_batch[0])}")
+            
+            indices_tensor = torch.tensor(indices_batch)  # [batch_size, target_frames]
+            # print(f"indices_tensor shape: {indices_tensor.shape}")
+            
+            batch_indices = torch.arange(video.size(0)).unsqueeze(1)  # [batch_size, 1]
+            # print(f"batch_indices shape: {batch_indices.shape}")
+            
+            selected_video = video[batch_indices, indices_tensor]  # [batch_size, target_frames, feature_dim]
+            # print(f"selected_video shape: {selected_video.shape}")
+            # print(f"audio shape: {audio.shape}")
+            
+            audio,_ = self.ams(audio,selected_video)
+            # video=selected_video
+            # patch=video[batch_indices, indices_tensor]
+
 
 
 
@@ -218,8 +271,25 @@ class QA_TIGER(nn.Module):
         patch = self.patch_selecter(patch, audio, video)  # 基于音频和视频上下文选择并融合patch特征: [B, T, D]
         # 3. 音频时序特征聚合 (基于问题)
         a_global = self.at_aggregator(quest, audio)  # 输出全局音频表征: [B, D]
+        # print(f"a_global shape: {a_global.shape}")  # 输出全局音频表征的形状
         # 4. 视频和patch时序特征聚合 (基于问题)
+
+        # if self.use_mamba:
+        #     video_tokens = video.reshape(video.size(1), 60, 1, 1, video.size(3))
+        #     query_tokens = quest.reshape(quest.size(1), 60, 1, quest.size(2))
+        #     final_video = self.video_mamba(video_tokens,query_tokens)
+        #     print(f"final_video shape: {final_video.shape}")
+        #     patch_tokens = patch.reshape(patch.size(1), 60, 2, 7, 512)
+        #     final_patch = self.patch_mamba(patch_tokens,query_tokens)
+        #     print(f"final_patch shape: {final_patch.shape}")
+
+
+
+
+
         ap_global, vp_global = self.vt_aggregator(quest, video, patch)  # 输出全局音频-patch和视频-patch表征: [B, D], [B, D]
+        # print(f"ap_global shape: {ap_global.shape}")
+        # print(f"vp_global shape: {vp_global.shape}")
         # 5. 问题引导的多模态特征融合 (第一层融合视觉相关的全局特征)
         fusion = self.quest_grounding(quest, [ap_global, vp_global])  # [B, D]
         # 6. 问题引导的多模态特征融合 (第二层融合第一层结果和全局音频特征)
