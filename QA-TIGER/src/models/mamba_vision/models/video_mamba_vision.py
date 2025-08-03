@@ -54,13 +54,16 @@ class MultiModalPreprocessor(nn.Module):
         # 投影到相同维度
         img_proj = self.img_proj(img_feat)      # (B, T, hidden_dim)
         audio_proj = self.audio_proj(audio_feat) # (B, T, hidden_dim)
+        # print(f"img_proj shape: {img_proj.shape}")
         
         # 添加模态嵌入
         img_proj = img_proj + self.img_modal_embed.expand(B, T, -1)
+        # print(f"img_proj shape: {img_proj.shape}")
         audio_proj = audio_proj + self.audio_modal_embed.expand(B, T, -1)
         
         # 拼接并归一化
         combined = torch.cat([img_proj, audio_proj], dim=-1)  # (B, T, hidden_dim * 2)
+        # print(f"combined shape: {combined.shape}")
         combined = self.fusion_norm(combined)
         
         return combined
@@ -95,27 +98,34 @@ class TemporalPositionalEncoding(nn.Module):
         return x
 
 
-class TemporalConvBlock(nn.Module):
-    """时序卷积块，用于处理局部时序模式"""
+class SimplifiedTemporalBlock(nn.Module):
+    """简化的时序块，不使用卷积"""
     
-    def __init__(self, dim, kernel_size=3, drop_path=0., layer_scale=None):
+    def __init__(self, dim, drop_path=0., layer_scale=None):
         super().__init__()
         
-        self.conv1 = nn.Conv1d(dim, dim, kernel_size=kernel_size, 
-                              stride=1, padding=kernel_size//2, groups=dim)
-        self.norm1 = nn.LayerNorm(dim)
-        self.act1 = nn.GELU()
+        # 使用MLP代替卷积
+        self.mlp1 = nn.Sequential(
+            nn.LayerNorm(dim),
+            nn.Linear(dim, dim * 2),
+            nn.GELU(),
+            nn.Linear(dim * 2, dim),
+        )
         
-        self.conv2 = nn.Conv1d(dim, dim, kernel_size=kernel_size,
-                              stride=1, padding=kernel_size//2, groups=dim)
-        self.norm2 = nn.LayerNorm(dim)
+        self.mlp2 = nn.Sequential(
+            nn.LayerNorm(dim),
+            nn.Linear(dim, dim * 2),
+            nn.GELU(),
+            nn.Linear(dim * 2, dim),
+        )
         
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         
         # Layer scale
         self.layer_scale = layer_scale
         if layer_scale is not None and isinstance(layer_scale, (int, float)):
-            self.gamma = nn.Parameter(layer_scale * torch.ones(dim))
+            self.gamma1 = nn.Parameter(layer_scale * torch.ones(dim))
+            self.gamma2 = nn.Parameter(layer_scale * torch.ones(dim))
             self.use_layer_scale = True
         else:
             self.use_layer_scale = False
@@ -127,25 +137,18 @@ class TemporalConvBlock(nn.Module):
         Returns:
             x: (B, T, D)
         """
-        input_x = x
-        
-        # 转换为卷积格式 (B, D, T)
-        x = x.transpose(1, 2)
-        x = self.conv1(x)
-        x = x.transpose(1, 2)  # 转回 (B, T, D)
-        x = self.norm1(x)
-        x = self.act1(x)
-        
-        # 第二个卷积
-        x = x.transpose(1, 2)
-        x = self.conv2(x)
-        x = x.transpose(1, 2)
-        x = self.norm2(x)
-        
+        # 第一个MLP块
         if self.use_layer_scale:
-            x = x * self.gamma
-            
-        x = input_x + self.drop_path(x)
+            x = x + self.drop_path(self.gamma1 * self.mlp1(x))
+        else:
+            x = x + self.drop_path(self.mlp1(x))
+        
+        # 第二个MLP块
+        if self.use_layer_scale:
+            x = x + self.drop_path(self.gamma2 * self.mlp2(x))
+        else:
+            x = x + self.drop_path(self.mlp2(x))
+        
         return x
 
 
@@ -225,26 +228,7 @@ class VideoMambaVisionMixer(nn.Module):
         # 输出投影
         self.out_proj = nn.Linear(self.d_inner, self.d_model, bias=bias, **factory_kwargs)
         
-        # 1D 卷积
-        self.conv1d_x = nn.Conv1d(
-            in_channels=self.d_inner // 2,
-            out_channels=self.d_inner // 2,
-            bias=conv_bias,
-            kernel_size=d_conv,
-            groups=self.d_inner // 2,
-            padding=d_conv // 2,
-            **factory_kwargs,
-        )
-        
-        self.conv1d_z = nn.Conv1d(
-            in_channels=self.d_inner // 2,
-            out_channels=self.d_inner // 2,
-            bias=conv_bias,
-            kernel_size=d_conv,
-            groups=self.d_inner // 2,
-            padding=d_conv // 2,
-            **factory_kwargs,
-        )
+        # 移除1D卷积层，简化架构
 
     def forward(self, hidden_states):
         """
@@ -254,18 +238,22 @@ class VideoMambaVisionMixer(nn.Module):
             output: (B, T, D)
         """
         batch_size, seq_len, _ = hidden_states.shape
+        # print(f"VideoMambaVisionMixer input: {hidden_states.shape}, batch_size={batch_size}, seq_len={seq_len}")
         
         # 输入投影和分割
         xz = self.in_proj(hidden_states)  # (B, T, d_inner)
+        # print(f"After in_proj: {xz.shape}")
         xz = rearrange(xz, "b l d -> b d l")  # (B, d_inner, T)
+        # print(f"After rearrange to (b d l): {xz.shape}")
         x, z = xz.chunk(2, dim=1)  # 各自 (B, d_inner//2, T)
+        # print(f"After chunk - x: {x.shape}, z: {z.shape}")
         
         # A 矩阵
         A = -torch.exp(self.A_log.float())
         
-        # 1D 卷积
-        x = F.silu(self.conv1d_x(x))
-        z = F.silu(self.conv1d_z(z))
+        # 移除1D卷积，直接使用激活函数
+        x = F.silu(x)
+        z = F.silu(z)
         
         # 状态空间计算
         x_dbl = self.x_proj(rearrange(x, "b d l -> (b l) d"))  # (B*T, dt_rank + 2*d_state)
@@ -468,30 +456,21 @@ class VideoMambaVision(nn.Module):
             for block_idx in range(depth):
                 global_block_idx = sum(depths[:stage_idx]) + block_idx
                 
-                # 前两个阶段使用卷积，后两个阶段使用 Mamba + Attention
-                if stage_idx < 2:
-                    # 时序卷积块
-                    block = TemporalConvBlock(
-                        dim=feature_dim,
-                        drop_path=dpr[global_block_idx],
-                        layer_scale=layer_scale
-                    )
-                else:
-                    # Mamba 或 Attention 块
-                    # 后半部分层使用注意力
-                    mixer_type = "attention" if block_idx >= depth // 2 else "mamba"
-                    
-                    block = VideoMambaBlock(
-                        dim=feature_dim,
-                        mixer_type=mixer_type,
-                        num_heads=num_heads[stage_idx],
-                        mlp_ratio=mlp_ratio,
-                        drop=drop_rate,
-                        attn_drop=attn_drop_rate,
-                        drop_path=dpr[global_block_idx],
-                        layer_scale=layer_scale,
-                        causal=causal,
-                    )
+                # 所有阶段都使用 Mamba + Attention，移除卷积
+                # 前半部分层使用Mamba，后半部分层使用注意力
+                mixer_type = "attention" if block_idx >= depth // 2 else "mamba"
+                
+                block = VideoMambaBlock(
+                    dim=feature_dim,
+                    mixer_type=mixer_type,
+                    num_heads=num_heads[stage_idx],
+                    mlp_ratio=mlp_ratio,
+                    drop=drop_rate,
+                    attn_drop=attn_drop_rate,
+                    drop_path=dpr[global_block_idx],
+                    layer_scale=layer_scale,
+                    causal=causal,
+                )
                 
                 stage_blocks.append(block)
             
@@ -523,7 +502,7 @@ class VideoMambaVision(nn.Module):
         """
         # 多模态融合
         x = self.multimodal_prep(img_seq, audio_seq)  # (B, T, hidden_dim * 2)
-        
+        # print(f"x shape: {x.shape}")
         # 添加位置编码
         x = self.pos_encoding(x)
         

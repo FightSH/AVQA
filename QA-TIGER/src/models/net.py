@@ -14,6 +14,7 @@ from .MCCD.layer import MCCD_MLP  # 导入MCCD的MLP模块
 from .TWM.net_encoders import AMS
 from .encoders import(CLIP_TEncoder,Hug_Clip_TEncoder,SigLIP_TEncoder,SigLIP2_TEncoder)   # 导入CLIP文本编码器
 # from .mamba.modules.mamba_compressor import MambaCompressor
+from .mamba_vision.video_mamba_integration import VideoMambaAdapter, MambaEnhancedQATiger
 from .modules import (
     Projection, QstGrounding,  # 导入自定义模块：投影、问题定位
     TempMoE, AVQCrossAttn,  # 导入自定义模块：时序混合专家、音视问交叉注意力
@@ -43,6 +44,8 @@ class QA_TIGER(nn.Module):
                  encoder_type: str = 'ViT-L/14@336px', # CLIP文本编码器的类型
                  use_ams: bool = False,       # 是否使用自适应多尺度稀疏混合专家 (AMS)
                  use_mamba: bool = False,     # 是否使用mamba模块
+                 use_video_mamba: bool = True, # 是否使用VideoMamba模块
+                 mamba_config: dict = None,   # VideoMamba配置
                  mccd=None,
                  **kwargs
     ):
@@ -53,6 +56,7 @@ class QA_TIGER(nn.Module):
         self.mccd = mccd
         self.use_ams = use_ams
         self.use_mamba = use_mamba
+        self.use_video_mamba = use_video_mamba
 
 
 
@@ -62,6 +66,31 @@ class QA_TIGER(nn.Module):
         self.patch_proj = Projection(patch_dim, d_model)  # Patch特征投影
         self.words_proj = Projection(video_dim, d_model)  # 词语特征投影
         self.quest_proj = Projection(video_dim, d_model)  # 问题特征投影
+
+        # VideoMamba模块
+        if use_video_mamba:
+            mamba_config = mamba_config or {}
+            # 提取VideoMambaAdapter需要的参数
+            adapter_params = {
+                'd_model': d_model,
+                'video_dim': 512,
+                'audio_dim': 512,
+                'mamba_hidden_dim': mamba_config.get('mamba_hidden_dim', d_model // 2),
+                'depths': mamba_config.get('depths', [2, 2, 8, 2]),
+                'num_heads': mamba_config.get('num_heads', [4, 8, 16, 32]),
+                'drop_path_rate': mamba_config.get('drop_path_rate', 0.1),
+                'layer_scale': mamba_config.get('layer_scale', 1e-6),
+                'causal': mamba_config.get('causal', False),
+            }
+            self.video_mamba_adapter = VideoMambaAdapter(**adapter_params)
+            
+            # VideoMamba特征融合层
+            self.mamba_fusion = nn.Sequential(
+                nn.Linear(d_model * 2, d_model),
+                nn.LayerNorm(d_model),
+                nn.ReLU(),
+                nn.Dropout(0.1)
+            )
 
         
 
@@ -190,8 +219,10 @@ class QA_TIGER(nn.Module):
         # 调用sub_forward获取处理后的问题、词语、音频、视频和patch特征 (此处prefix为空，处理正样本)
         quest, words, audio, video, patch = self.sub_forward(reshaped_data, prefix='')
 
-
-
+        # audio = audio[:, ::2, :]      # shape: [B, T//2, D]
+        # video = video[:, ::2, :]      # shape: [B, T//2, D]
+        # patch = patch[:, ::2, :, :]   # shape: [B, T//2, P, D]
+        # audio = audio.repeat_interleave(2, dim=1)
         
         # Projection
         audio = self.audio_proj(audio) # [B, T, D]
@@ -199,8 +230,32 @@ class QA_TIGER(nn.Module):
         words = self.words_proj(words) # [B, 77, D]
         quest = self.quest_proj(quest) # [B, D]
         patch = self.patch_proj(patch) # [B, T, P, D]
-       
 
+        # VideoMamba增强处理
+        if self.use_video_mamba:
+            # 获取原始输入用于VideoMamba处理
+            original_video = video  # [B, T, video_dim]
+            original_audio = audio  # [B, T, audio_dim]
+            
+            # 通过VideoMamba获取增强特征
+            mamba_features = self.video_mamba_adapter(original_video, original_audio)  # [B, T, d_model]
+            
+            # 融合原始投影特征和Mamba增强特征
+            # 音频增强
+            audio_combined = torch.cat([audio, mamba_features], dim=-1)  # [B, T, 2*d_model]
+            audio = self.mamba_fusion(audio_combined)  # [B, T, d_model]
+            
+            # 视频增强
+            video_combined = torch.cat([video, mamba_features], dim=-1)  # [B, T, 2*d_model]
+            video = self.mamba_fusion(video_combined)  # [B, T, d_model]
+            
+            # Patch增强 - 广播Mamba特征到所有patch
+            B, T, P, D = patch.shape
+            mamba_expanded = mamba_features.unsqueeze(2).expand(B, T, P, D)  # [B, T, P, d_model]
+            patch_combined = torch.cat([patch, mamba_expanded], dim=-1)  # [B, T, P, 2*d_model]
+            patch_combined_flat = patch_combined.view(B * T * P, -1)
+            patch_enhanced_flat = self.mamba_fusion(patch_combined_flat)
+            patch = patch_enhanced_flat.view(B, T, P, D)  # [B, T, P, d_model]
 
         # audio,video = self.feature_adjuster(audio, video)
 
@@ -269,27 +324,12 @@ class QA_TIGER(nn.Module):
         audio, video = self.crs_attn(audio, video, words)  # 输出增强后的音频和视频特征: [B, T, D], [B, T, D]
         # 2. Patch选择与融合
         patch = self.patch_selecter(patch, audio, video)  # 基于音频和视频上下文选择并融合patch特征: [B, T, D]
+
         # 3. 音频时序特征聚合 (基于问题)
         a_global = self.at_aggregator(quest, audio)  # 输出全局音频表征: [B, D]
-        # print(f"a_global shape: {a_global.shape}")  # 输出全局音频表征的形状
         # 4. 视频和patch时序特征聚合 (基于问题)
-
-        # if self.use_mamba:
-        #     video_tokens = video.reshape(video.size(1), 60, 1, 1, video.size(3))
-        #     query_tokens = quest.reshape(quest.size(1), 60, 1, quest.size(2))
-        #     final_video = self.video_mamba(video_tokens,query_tokens)
-        #     print(f"final_video shape: {final_video.shape}")
-        #     patch_tokens = patch.reshape(patch.size(1), 60, 2, 7, 512)
-        #     final_patch = self.patch_mamba(patch_tokens,query_tokens)
-        #     print(f"final_patch shape: {final_patch.shape}")
-
-
-
-
-
         ap_global, vp_global = self.vt_aggregator(quest, video, patch)  # 输出全局音频-patch和视频-patch表征: [B, D], [B, D]
-        # print(f"ap_global shape: {ap_global.shape}")
-        # print(f"vp_global shape: {vp_global.shape}")
+
         # 5. 问题引导的多模态特征融合 (第一层融合视觉相关的全局特征)
         fusion = self.quest_grounding(quest, [ap_global, vp_global])  # [B, D]
         # 6. 问题引导的多模态特征融合 (第二层融合第一层结果和全局音频特征)

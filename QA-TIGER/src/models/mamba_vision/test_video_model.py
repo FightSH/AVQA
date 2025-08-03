@@ -10,7 +10,7 @@ from models.video_mamba_vision import (
     video_mamba_vision_base,
     VideoMambaVision
 )
-from .video_config import get_config
+from video_config import get_config
 
 
 def test_model_creation():

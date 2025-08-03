@@ -139,7 +139,7 @@ def get_optim(cfg: dict,
     else:
         params = model.parameters()
 
-    optimizer = optim.Adam(params,
+    optimizer = optim.AdamW(params,
                            lr=cfg.hyper_params.optim.lr,
                            weight_decay=cfg.hyper_params.optim.weight_decay,
                            betas=cfg.hyper_params.optim.betas)
