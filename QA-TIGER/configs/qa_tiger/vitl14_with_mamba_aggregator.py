@@ -1,11 +1,11 @@
 config = dict(
     type='qa-tiger',
-    seed=3407,
-    epochs=30,
+    seed=713,
+    epochs=17,
     num_labels=42,
     log_interval=100,
-    output_dir='/mnt/sda/shenhao/code/AVQA/QA-TIGER/qa-tiger_clip_vitl14@336px',
-    weight='/mnt/sda/shenhao/code/AVQA/QA-TIGER/qa-tiger_clip_vitl14@336px/2025-06-18-12-34-16_seed713/best.pt',
+    output_dir='/mnt/sda/shenhao/code/AVQA/QA-TIGER/qa-tiger_clip_vitl14@336px_mamba_agg',
+    weight=None,  # 从头开始训练
     pretrained_weight="base",
     mccd=dict(
         flag=False,
@@ -21,7 +21,7 @@ config = dict(
         ),
         loss_weight=dict(
             major_loss_weight=1,
-            distribution_loss_weight=0.1,     # 0.01
+            distribution_loss_weight=0.1,
             euclidean_distance_fusion_q_weight=0.2,
             euclidean_distance_fusion_a_weight=0.4,
             euclidean_distance_fusion_v_weight=0.4,
@@ -32,18 +32,16 @@ config = dict(
         ),
         mlp=dict(
             input_dim=512,
-            dimensions=[ 512, 256,42 ],
+            dimensions=[512, 256, 42],
         )
-
-
     ),
 
     data=dict(
         root='./data',
         img_size=336,
-        batch_size=32,
-        eval_batch_size=32,
-        num_workers=8,
+        batch_size=16,
+        eval_batch_size=16,
+        num_workers=16,
         frame_sample_rate=1,
         audios_dir='/mnt/sda/shenhao/datasets/MUSIC-AVQA/audio',
         frames_dir='/mnt/sda/shenhao/datasets/MUSIC-AVQA/frames',
@@ -62,18 +60,12 @@ config = dict(
         # (60, 14, 1024)
         patch_feat='/mnt/sda/shenhao/datasets/MUSIC-AVQA/feats/qa_tiger/tome_feat',
 
-        # audio_feat='/mnt/sda/shenhao/datasets/MUSIC-AVQA/feats/qa_tiger/audit_feat/60vggish/',
-        # (60, 1152)
-        # video_feat='/mnt/sda/shenhao/datasets/siglip2/MUSIC-AVQA/global_features/',
-        # (60, 196, 1152)
-        # patch_feat='/mnt/sda/shenhao/datasets/siglip2/MUSIC-AVQA/patch_features/',
-
         prompt_feat=None,
     ),
 
     hyper_params=dict(
         gpus='1',
-        model_type="QA-TIGER_ViTL14@336px",
+        model_type="QA-TIGER_ViTL14@336px_MambaAgg",
         model=dict(
             d_model=512,
             video_dim=768,
@@ -82,16 +74,39 @@ config = dict(
             audio_dim=128,
             topK=7,
             num_experts=7,
-            # encoder_type='ViT-L/14@336px',
             encoder_type='openai/clip-vit-large-patch14',
-            # encoder_type='google/siglip2-so400m-patch14-384',
             mccd_flag=False,
             use_ams=False,
             use_mamba=False,
+            
+            # VideoMamba特征增强配置
+            use_video_mamba=False,  # 关闭特征增强，专注于聚合器
+            mamba_config=dict(
+                mamba_hidden_dim=256,
+                depths=[2, 2, 6, 2],
+                num_heads=[4, 8, 16, 32],
+                drop_path_rate=0.1,
+                layer_scale=1e-6,
+                causal=False,
+            ),
+            
+            # VideoMamba聚合器配置
+            use_mamba_aggregator=True,  # 启用VideoMamba聚合器
+            mamba_aggregator_config=dict(
+                mamba_hidden_dim=256,
+                depths=[1, 1, 2, 1],  # 相对较小的配置，适合聚合任务
+                num_heads=[4, 8, 16, 32],
+                question_fusion='concat',  # 问题融合方式: 'concat', 'cross_attn', 'add'
+                dropout=0.1,
+                drop_path_rate=0.05,
+                layer_scale=1e-6,
+                causal=False,
+            ),
+            
             lambda_multifaceted=0.001,
         ),
         optim=dict(
-            lr=2e-4,
+            lr=1.7e-4,
             encoder_lr=None,
             min_lr=1e-7,
             weight_decay=1e-2,

@@ -23,12 +23,14 @@ class VideoMambaAdapter(nn.Module):
         depths: list = None,
         num_heads: list = None,
         use_pretrained: bool = False,
+        use_feature_adapter: bool = False,  # 是否使用特征适配层
         **kwargs
     ):
         super().__init__()
         
         self.d_model = d_model
         self.mamba_hidden_dim = mamba_hidden_dim
+        self.use_feature_adapter = use_feature_adapter
         
         # 设置默认配置
         if depths is None:
@@ -52,14 +54,26 @@ class VideoMambaAdapter(nn.Module):
             **filtered_kwargs
         )
         
-        # 特征维度适配层
+        # 特征维度适配层（可选）
         mamba_output_dim = mamba_hidden_dim * 2  # VideoMambaVision输出维度
-        self.feature_adapter = nn.Sequential(
-            nn.Linear(mamba_output_dim, d_model),
-            nn.LayerNorm(d_model),
-            nn.ReLU(),
-            nn.Dropout(0.1)
-        )
+        if use_feature_adapter and mamba_output_dim != d_model:
+            # 只有在维度不匹配时才需要适配
+            self.feature_adapter = nn.Sequential(
+                nn.Linear(mamba_output_dim, d_model),
+                nn.LayerNorm(d_model),
+                nn.ReLU(),
+                nn.Dropout(0.1)
+            )
+        elif use_feature_adapter:
+            # 维度匹配但仍想要特征变换
+            self.feature_adapter = nn.Sequential(
+                nn.LayerNorm(d_model),
+                nn.ReLU(),
+                nn.Dropout(0.1)
+            )
+        else:
+            # 不使用适配层
+            self.feature_adapter = nn.Identity()
         
         # 时序特征增强层
         self.temporal_enhance = nn.MultiheadAttention(
@@ -79,24 +93,16 @@ class VideoMambaAdapter(nn.Module):
         Returns:
             enhanced_features: (B, T, d_model) 增强后的多模态特征
         """
-        # 通过VideoMambaVision提取全局特征
-        # print(f"video shape: {video_seq.shape}")
-        # print(f"audio shape: {audio_seq.shape}")
-        global_features = self.video_mamba.forward_features(video_seq, audio_seq)  # (B, mamba_output_dim)
-        # print(f"global_features shape: {global_features.shape}")
-        # 适配到目标维度
-        adapted_features = self.feature_adapter(global_features)  # (B, d_model)
-        # print(f"adapted_features shape: {adapted_features.shape}")
-        # 扩展到时序维度并与原始特征结合
-        B, T = video_seq.shape[:2]
-
-        expanded_features = adapted_features.unsqueeze(1).expand(B, T, -1)  # (B, T, d_model)
-        # print(f"expanded_features shape: {expanded_features.shape}")
-        # 时序增强
-        enhanced_features, _ = self.temporal_enhance(
-            expanded_features, expanded_features, expanded_features
-        )
-        enhanced_features = self.norm(enhanced_features + expanded_features)
+        # 直接使用VideoMambaVision的时序特征，保留完整的时序信息
+        temporal_features = self.video_mamba.forward_temporal_features(video_seq, audio_seq)  # (B, T, mamba_output_dim)
+        
+        # 特征适配（如果需要）
+        if isinstance(self.feature_adapter, nn.Identity):
+            # 不需要适配，直接返回
+            enhanced_features = temporal_features
+        else:
+            # 需要适配或特征变换
+            enhanced_features = self.feature_adapter(temporal_features)  # (B, T, d_model)
         
         return enhanced_features
 

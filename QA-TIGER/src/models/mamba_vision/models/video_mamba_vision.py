@@ -519,6 +519,30 @@ class VideoMambaVision(nn.Module):
         
         return x
     
+    def forward_temporal_features(self, img_seq, audio_seq):
+        """
+        Args:
+            img_seq: (B, T, img_dim) 图像特征序列
+            audio_seq: (B, T, audio_dim) 音频特征序列
+        Returns:
+            x: (B, T, feature_dim) 时序特征，保留时间维度
+        """
+        # 多模态融合
+        x = self.multimodal_prep(img_seq, audio_seq)  # (B, T, hidden_dim * 2)
+        
+        # 添加位置编码
+        x = self.pos_encoding(x)
+        
+        # 通过各阶段
+        for stage in self.stages:
+            for block in stage:
+                x = block(x)
+        
+        # 最终归一化，保留时序维度
+        x = self.norm(x)  # (B, T, hidden_dim * 2)
+        
+        return x
+    
     def forward(self, img_seq, audio_seq):
         """
         Args:
