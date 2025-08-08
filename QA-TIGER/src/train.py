@@ -48,6 +48,9 @@ def main():
     
     best_acc = 0
     best_epoch = -1
+    # Early stopping variables
+    patience = 7
+    patience_counter = 0
 
     if cfg['mccd']['flag'] is True:
         criterion = CRITERION.MCCD_Criterion(cfg.mccd, logger)
@@ -89,6 +92,7 @@ def main():
         if acc >= best_acc and not cfg.debug:
             best_acc = acc
             best_epoch = epoch
+            patience_counter = 0  # Reset patience counter when improvement is found
             sd = model.module.state_dict()
             new_sd = {}
             for k, v in sd.items():
@@ -101,9 +105,18 @@ def main():
                     torch.save(new_sd, os.path.join(save_dir, f'best.pt'))
             else:
                 torch.save(new_sd, os.path.join(save_dir, f'best.pt'))
+        else:
+            patience_counter += 1
+            logger.info(f"No improvement for {patience_counter} epochs")
         
         logger.info(f"Epoch {epoch} done with {acc:3.2f} and loss {loss:.5f}.")
         logger.info(f"At epoch{best_epoch} best acc: {best_acc:3.2f}.")
+        
+        # Early stopping check
+        if patience_counter >= patience:
+            logger.info(f"Early stopping triggered after {patience} epochs without improvement")
+            logger.info(f"Best accuracy: {best_acc:3.2f} at epoch {best_epoch}")
+            break
 
     if not cfg.debug:
         logger.info(f"\nTesting with Best validation model... {cfg.data.test_annot}")
