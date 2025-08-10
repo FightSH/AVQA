@@ -25,10 +25,6 @@ from .modules import (
 
 
 
-# from .TWM.net_encoders import AMS  # 导入自适应多尺度稀疏混合专家模型
-
-from .PAVE.info_aggregator import PAVEModuleV5
-from .other.other_module import FeatureAdjuster
 
 
 # 定义QA-TIGER模型类，继承自nn.Module
@@ -47,20 +43,22 @@ class QA_TIGER(nn.Module):
                  use_mamba: bool = False,     # 是否使用mamba模块
                  use_video_mamba: bool = False, # 是否使用VideoMamba模块
                  mamba_config: dict = None,   # VideoMamba配置
-                 use_mamba_aggregator: bool = True, # 是否使用VideoMamba聚合器
+                 use_mamba_aggregator: bool = False, # 是否使用VideoMamba聚合器
                  mamba_aggregator_config: dict = None, # VideoMamba聚合器配置
+                 use_unified_aggregator: bool = True, # 是否使用统一序列聚合器
+                 use_align_mamba: bool = False, # 是否使用对齐的Mamba模块
                  mccd=None,
                  **kwargs
     ):
         super(QA_TIGER, self).__init__()
 
-        self.nce_loss = nce_loss
-        self.late_fusion = late_fusion
+
         self.mccd = mccd
         self.use_ams = use_ams
         self.use_mamba = use_mamba
         self.use_video_mamba = use_video_mamba
         self.use_mamba_aggregator = use_mamba_aggregator
+        self.use_unified_aggregator = use_unified_aggregator
 
 
 
@@ -118,14 +116,30 @@ class QA_TIGER(nn.Module):
         # self.v_attn = AVQCrossAttn(d_model, 8)  # 视频-注意力模块
         # self.a_attn = nn.MultiheadAttention(d_model, 8 )
         # self.v_attn = nn.MultiheadAttention(d_model, 8 )
+        # self.p_attn = nn.MultiheadAttention(d_model, 8 )
         
         # 定义模型的核心组件
         self.crs_attn = AVQCrossAttn(d_model, 8)  # 音频-视频-问题交叉注意力模块
         self.patch_selecter = PatchSelecter(d_model, 8)  # Patch选择模块
         self.quest_grounding = QstGrounding(d_model, 8)  # 问题定位模块
         
-        # 聚合器选择：VideoMamba聚合器 vs 传统TempMoE
-        if use_mamba_aggregator:
+        # 聚合器选择：统一序列聚合器 vs VideoMamba聚合器 vs 传统TempMoE
+        if use_unified_aggregator:
+            # 使用新的统一序列聚合器
+            mamba_agg_config = mamba_aggregator_config or {}
+            
+            # 统一聚合器 - 处理所有模态
+            self.unified_aggregator = create_mamba_aggregator(
+                aggregator_type="unified_single",
+                d_model=d_model,
+                mamba_config=mamba_agg_config
+            )
+            
+            # 不需要单独的at_aggregator和vt_aggregator
+            self.at_aggregator = None
+            self.vt_aggregator = None
+            
+        elif use_mamba_aggregator:
             # 使用VideoMamba聚合器
             mamba_agg_config = mamba_aggregator_config or {}
             
@@ -142,12 +156,16 @@ class QA_TIGER(nn.Module):
                 d_model=d_model,
                 mamba_config=mamba_agg_config
             )
+            
+            self.unified_aggregator = None
         else:
             # 使用传统TempMoE聚合器
             # 音频时序混合专家模块，用于聚合音频时序特征
             self.at_aggregator = TempMoE(d_model, 8, topK=topK, n_experts=num_experts)
             # 视频时序混合专家模块，用于聚合视频和patch的时序特征
             self.vt_aggregator = TempMoE(d_model, 8, topK=topK, n_experts=num_experts, vis_branch=True)
+            
+            self.unified_aggregator = None
 
         self.head_act = nn.ReLU()  # 最终输出前的激活函数
         self.dropout = nn.Dropout(0.1)  # Dropout层，防止过拟合
@@ -171,17 +189,17 @@ class QA_TIGER(nn.Module):
             if mccd['bias_learner']['v_bias']:
                 self.v_bias = MCCD_MLP(dimensions=mccd['mlp']['dimensions'])
 
-        # 引入AMS
-        if self.use_ams:
-             self.ams =AMS(
-            input_size=512,
-            output_size=512,
-            seq_lenth=60,
-            num_experts=4,
-            d_model=512,
-            d_ff=64,
-            patch_size=[15, 10, 6, 3],
-            k=4)
+        # # 引入AMS
+        # if self.use_ams:
+        #      self.ams =AMS(
+        #     input_size=512,
+        #     output_size=512,
+        #     seq_lenth=60,
+        #     num_experts=4,
+        #     d_model=512,
+        #     d_ff=64,
+        #     patch_size=[15, 10, 6, 3],
+        #     k=4)
 
         # if use_mamba:
             # self.video_mamba = MambaCompressor(d_model=512, n_layer=1)
@@ -350,8 +368,50 @@ class QA_TIGER(nn.Module):
         # 2. Patch选择与融合
         patch = self.patch_selecter(patch, audio, video)  # 基于音频和视频上下文选择并融合patch特征: [B, T, D]
 
-        # 3. 音频时序特征聚合 (基于问题)
-        if self.use_mamba_aggregator:
+        # 3. 时序特征聚合 (基于问题)
+        if self.use_unified_aggregator:
+            # 使用新的统一序列聚合器
+            # patch_selecter返回的是list [audio_patch, video_patch]，我们需要将其合并
+            if isinstance(patch, list):
+                # 如果patch是list，取平均或选择一个
+                patch_unified = (patch[0] + patch[1]) / 2  # [B, T, D] 简单平均
+            else:
+                patch_unified = patch  # [B, T, D]
+            
+            # 统一聚合器处理所有模态
+            unified_global = self.unified_aggregator(quest, video, audio, patch_unified)  # [B, 1, D]
+            # print(f"unified_global shape: {unified_global.shape}")
+            unified_global = unified_global.squeeze(1)
+            
+            # print(f"unified_global shape: {unified_global.shape}")
+            fusion = self.head_act(unified_global)  # ReLU激活
+            output = self.head(fusion)  # 线性层输出最终的分类logits: [B, num_answers]
+            return_dict.update({'out': output})  # 将输出添加到返回字典中
+            return {
+                'out': output,
+                'fusion_logits': output,
+                'q_bias_logits': q_bias_logits,
+                'a_bias_logits': a_bias_logits,
+                'v_bias_logits': v_bias_logits
+            }
+
+
+            # 为了兼容后续的quest_grounding，我们需要创建三个特征
+            # 这里我们将统一的全局特征复制三份，但通过不同的线性层处理以产生差异
+            # if not hasattr(self, 'unified_split_heads'):
+            #     # 动态创建分割头（只在第一次使用时创建）
+            #     self.unified_split_heads = nn.ModuleList([
+            #         nn.Linear(d_model, d_model),
+            #         nn.Linear(d_model, d_model),
+            #         nn.Linear(d_model, d_model)
+            #     ]).to(unified_global.device)
+            
+            # unified_squeezed = unified_global.squeeze(1)  # [B, D]
+            # a_global = self.unified_split_heads[0](unified_squeezed).unsqueeze(1)  # [B, 1, D]
+            # ap_global = self.unified_split_heads[1](unified_squeezed).unsqueeze(1)  # [B, 1, D]
+            # vp_global = self.unified_split_heads[2](unified_squeezed).unsqueeze(1)  # [B, 1, D]
+            
+        elif self.use_mamba_aggregator:
             # 使用VideoMamba聚合器
             a_global = self.at_aggregator(quest, audio=audio)  # 输出全局音频表征: [B, 1, D]
             # 4. 视频和patch时序特征聚合 (基于问题)
@@ -368,7 +428,7 @@ class QA_TIGER(nn.Module):
             # 保持[B, 1, D]格式以匹配quest_grounding的期望输入
 
         # 5. 问题引导的多模态特征融合 (第一层融合视觉相关的全局特征)
-        # ap_global和vp_global都是[B, 1, D]格式，符合quest_grounding的期望
+        # ap_global和vp_global都是[B, 1, D]格式，符���quest_grounding的期望
         fusion = self.quest_grounding(quest, [ap_global, vp_global])  # [B, D]
         # 6. 问题引导的多模态特征融合 (第二层融合第一层结果和全局音频特征)
         # fusion是[B, D]，需要unsqueeze；a_global是[B, 1, D]，直接使用

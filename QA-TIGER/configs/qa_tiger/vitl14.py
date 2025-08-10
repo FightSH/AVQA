@@ -9,10 +9,6 @@ config = dict(
     pretrained_weight="base",
     mccd=dict(
         flag=False,
-        batch_size=64,
-        eval_batch_size=128,
-        train_num_workers=8,
-        eval_num_workers=8,
         bias_learner=dict(
             three_bias_learner_exist=True,
             q_bias=True,
@@ -34,8 +30,6 @@ config = dict(
             input_dim=512,
             dimensions=[ 512, 256,42 ],
         )
-
-
     ),
 
     data=dict(
@@ -56,13 +50,13 @@ config = dict(
         # precomputed features
         quest_feat=None,
         # (60, 128)
-        audio_feat='/mnt/sda/shenhao/datasets/MUSIC-AVQA/feats/qa_tiger/audit_feat/60vggish',
+        audio_feat='/mnt/sda/shenhao/datasets/MUSIC-AVQA/feats/imagebind/audio60',
         # (60, 768)
         video_feat='/mnt/sda/shenhao/datasets/MUSIC-AVQA/feats/qa_tiger/clip_feat/',
         # (60, 14, 1024)
         patch_feat='/mnt/sda/shenhao/datasets/MUSIC-AVQA/feats/qa_tiger/tome_feat',
 
-        # audio_feat='/mnt/sda/shenhao/datasets/MUSIC-AVQA/feats/qa_tiger/audit_feat/60vggish/',
+        # audio_feat='/mnt/sda/shenhao/datasets/MUSIC-AVQA/feats/imagebind/audio60',
         # (60, 1152)
         # video_feat='/mnt/sda/shenhao/datasets/siglip2/MUSIC-AVQA/global_features/',
         # (60, 196, 1152)
@@ -79,7 +73,7 @@ config = dict(
             video_dim=768,
             patch_dim=1024,
             quest_dim=512,
-            audio_dim=128,
+            audio_dim=1024,
             topK=7,
             num_experts=7,
             # encoder_type='ViT-L/14@336px',
@@ -89,9 +83,28 @@ config = dict(
             use_ams=False,
             use_mamba=False,
             lambda_multifaceted=0.001,
+            mamba_config=dict(
+                mamba_hidden_dim=256,
+                depths=[2],
+                num_heads=[16],
+                layer_scale=  1e-6,
+                causal=  False,
+                question_fusion='concat',
+                drop_path_rate=0.1,
+            ),
+            mamba_aggregator_config=dict(
+                d_model=512,
+                mamba_hidden_dim=256,
+                depths=[2],
+                num_heads=[16], 
+                question_fusion='concat',
+                dropout=0.1,)
+
+
+
         ),
         optim=dict(
-            lr=2e-4,
+            lr=1.7e-4,
             encoder_lr=None,
             min_lr=1e-7,
             weight_decay=1e-2,

@@ -542,6 +542,20 @@ class VideoMambaVision(nn.Module):
         x = self.norm(x)  # (B, T, hidden_dim * 2)
         
         return x
+
+        
+    def forward_united_feature(self, seq):
+        
+         # 通过各阶段
+        for stage in self.stages:
+            for block in stage:
+                seq = block(seq)
+        
+        # 最终归一化，保留时序维度
+        seq = self.norm(seq)  # (B, T, hidden_dim * 2)
+        seq = seq.mean(dim=1)  # (B, hidden_dim * 2)
+        return seq
+ 
     
     def forward(self, img_seq, audio_seq):
         """

@@ -1,17 +1,11 @@
-"""
-AlignMamba: 基于最优传输和MMD的多模态对齐Mamba框架
-
-本实现严格遵循method.md中的数学公式和算法描述，包含：
-1. 基于最优传输的局部跨模态对齐 (公式1-6)
-2. 基于MMD的全局跨模态对齐 (公式7-10)  
-3. 基于Mamba的融合与优化 (公式11-12)
-"""
-
 from typing import Optional, Literal, Dict, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
+
+
+
 
 
 class OptimalTransportAlignment(nn.Module):
@@ -210,58 +204,9 @@ class MMDGlobalAlignment(nn.Module):
         return alignment_loss
 
 
-class MambaBackbone(nn.Module):
-    """
-    Mamba骨干网络，支持自动回退到Transformer
-    
-    优先使用mamba-ssm实现，如果不可用则回退到TransformerEncoder
-    """
-    
-    def __init__(self, d_model: int, n_layers: int = 4, dropout: float = 0.1,
-                 n_heads: int = 8, dim_feedforward: int = 2048):
-        super().__init__()
-        
-        try:
-            # 尝试使用Mamba实现
-            from mamba_ssm import Mamba
-            
-            layers = []
-            for _ in range(n_layers):
-                layers.append(
-                    nn.Sequential(
-                        nn.LayerNorm(d_model),
-                        Mamba(d_model=d_model, d_state=16, d_conv=4, expand=2),
-                        nn.Dropout(dropout)
-                    )
-                )
-            self.backbone = nn.Sequential(*layers)
-            self.is_mamba = True
-            
-        except ImportError:
-            # 回退到Transformer实现
-            encoder_layer = nn.TransformerEncoderLayer(
-                d_model=d_model,
-                nhead=n_heads,
-                dim_feedforward=dim_feedforward,
-                dropout=dropout,
-                batch_first=True,
-                activation="gelu",
-                norm_first=True
-            )
-            self.backbone = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
-            self.is_mamba = False
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: 输入序列 (B, T, D)
-        Returns:
-            output: 输出序列 (B, T, D)
-        """
-        return self.backbone(x)
 
 
-class AlignMamba(nn.Module):
+class AVQAAlignMamba(nn.Module):
     """
     AlignMamba: 整合局部和全局跨模态对齐机制的多模态融合框架
     
@@ -282,7 +227,7 @@ class AlignMamba(nn.Module):
         dim_video: int, 
         dim_language: int,
         # 模型配置
-        d_model: int = 256,
+        d_model: int = 512,
         n_layers: int = 4,
         dropout: float = 0.1,
         n_heads: int = 8,
@@ -292,7 +237,7 @@ class AlignMamba(nn.Module):
         lambda_align: float = 0.1,
         ot_eps: float = 1e-8,
         # 对齐策略
-        reverse_alignment: bool = False,  # 是否反向对齐（适用于视频问答）
+        reverse_alignment: bool = True,  # 是否反向对齐（适用于视频问答）
         alignment_strategy: Literal["standard", "reverse", "bidirectional"] = "standard",
         # 任务配置
         task_type: Literal["classification", "regression", "feature_extraction"] = "feature_extraction",
@@ -318,49 +263,7 @@ class AlignMamba(nn.Module):
         self.ot_aligner = OptimalTransportAlignment(eps=ot_eps)
         self.mmd_aligner = MMDGlobalAlignment(sigma=sigma)
         
-        # Mamba骨干网络
-        self.backbone = MambaBackbone(
-            d_model=d_model,
-            n_layers=n_layers,
-            dropout=dropout,
-            n_heads=n_heads,
-            dim_feedforward=dim_feedforward
-        )
-        
-        # 任务头
-        self._setup_task_head(num_classes)
     
-    def _setup_task_head(self, num_classes: Optional[int]):
-        """设置任务相关的输出头和损失函数"""
-        if self.task_type == "classification":
-            assert num_classes is not None and num_classes > 1, "分类任务需要指定类别数"
-            self.task_head = nn.Linear(self.d_model, num_classes)
-            self.task_loss_fn = nn.CrossEntropyLoss()
-        elif self.task_type == "regression":
-            out_dim = 1 if num_classes is None else num_classes
-            self.task_head = nn.Linear(self.d_model, out_dim)
-            self.task_loss_fn = nn.MSELoss()
-        else:  # feature_extraction
-            self.task_head = nn.Identity()
-            self.task_loss_fn = None
-    
-    def _pool_sequence(self, sequence: torch.Tensor) -> torch.Tensor:
-        """
-        对序列进行池化操作
-        
-        Args:
-            sequence: 输入序列 (B, T, D)
-        Returns:
-            pooled: 池化后的特征 (B, D)
-        """
-        if self.pooling == "mean":
-            return sequence.mean(dim=1)
-        elif self.pooling == "max":
-            return sequence.max(dim=1).values
-        elif self.pooling == "last":
-            return sequence[:, -1, :]
-        else:
-            raise ValueError(f"不支持的池化方式: {self.pooling}")
     
     def build_interleaved_sequence(self, aligned_video: torch.Tensor, 
                                  aligned_audio: torch.Tensor, 
@@ -466,155 +369,14 @@ class AlignMamba(nn.Module):
         
         # === 步骤3: 全局对齐损失（MMD-based） ===
         alignment_loss = self.mmd_aligner(Xv_tilde, Xa_tilde, Xl_aligned)
+
+
+
+
         
         # === 步骤4: 多模态融合 ===
         # 构建交错序列
-        X_mm = self.build_interleaved_sequence(Xv_tilde, Xa_tilde, Xl_aligned)  # (B, 3*target_length, d_model)
+        # X_mm = self.build_interleaved_sequence(Xv_tilde, Xa_tilde, Xl_aligned)  # (B, 3*target_length, d_model)
         
-        # Mamba骨干网络处理
-        fused_features = self.backbone(X_mm)  # (B, 3*T_l, d_model)
         
-        # === 步骤5: 任务预测 ===
-        outputs = {
-            "alignment_loss": alignment_loss
-        }
-        
-        # 根据任务类型处理输出
-        if self.task_type != "feature_extraction":
-            # 池化得到句子级表示
-            pooled_features = self._pool_sequence(fused_features)  # (B, d_model)
-            
-            # 通过任务头得到预测
-            task_output = self.task_head(pooled_features)
-            outputs["logits"] = task_output
-            
-            # 计算任务损失
-            if labels is not None and self.task_loss_fn is not None:
-                if self.task_type == "regression" and labels.dim() == 1:
-                    labels = labels.unsqueeze(-1)
-                task_loss = self.task_loss_fn(task_output, labels)
-                outputs["task_loss"] = task_loss
-                
-                # 总损失：公式(12) L = L_task + λ * L_align
-                total_loss = task_loss + self.lambda_align * alignment_loss
-                outputs["loss"] = total_loss
-            else:
-                outputs["loss"] = self.lambda_align * alignment_loss
-        else:
-            # 特征提取模式
-            outputs["loss"] = self.lambda_align * alignment_loss
-        
-        # 可选返回项
-        if return_features:
-            outputs["features"] = fused_features
-            outputs["pooled_features"] = self._pool_sequence(fused_features) if self.task_type != "feature_extraction" else None
-        
-        if return_alignments:
-            outputs["transport_matrices"] = {"audio_to_lang": Ma2l, "video_to_lang": Mv2l}
-            outputs["aligned_features"] = {"audio": Xa_tilde, "video": Xv_tilde}
-        
-        return outputs
-
-
-# 工厂函数，便于快速创建不同配置的模型
-def create_align_mamba_classifier(
-    dim_audio: int, dim_video: int, dim_language: int,
-    num_classes: int, d_model: int = 256, **kwargs
-) -> AlignMamba:
-    """创建分类任务的AlignMamba模型"""
-    return AlignMamba(
-        dim_audio=dim_audio,
-        dim_video=dim_video, 
-        dim_language=dim_language,
-        d_model=d_model,
-        task_type="classification",
-        num_classes=num_classes,
-        **kwargs
-    )
-
-
-def create_align_mamba_regressor(
-    dim_audio: int, dim_video: int, dim_language: int,
-    output_dim: int = 1, d_model: int = 256, **kwargs
-) -> AlignMamba:
-    """创建回归任务的AlignMamba模型"""
-    return AlignMamba(
-        dim_audio=dim_audio,
-        dim_video=dim_video,
-        dim_language=dim_language, 
-        d_model=d_model,
-        task_type="regression",
-        num_classes=output_dim,
-        **kwargs
-    )
-
-
-def create_align_mamba_feature_extractor(
-    dim_audio: int, dim_video: int, dim_language: int,
-    d_model: int = 256, **kwargs
-) -> AlignMamba:
-    """创建特征提取的AlignMamba模型"""
-    return AlignMamba(
-        dim_audio=dim_audio,
-        dim_video=dim_video,
-        dim_language=dim_language,
-        d_model=d_model,
-        task_type="feature_extraction",
-        **kwargs
-    )
-
-
-def create_align_mamba_video_qa(
-    dim_audio: int, dim_video: int, dim_question: int,
-    num_classes: int, d_model: int = 256, **kwargs
-) -> AlignMamba:
-    """
-    创建视频问答任务的AlignMamba模型
-    
-    针对视频问答任务的优化配置：
-    - 使用反向对齐策略，保持视频的完整时序信息
-    - 将问题特征对齐到视频长度，避免视觉信息丢失
-    """
-    return AlignMamba(
-        dim_audio=dim_audio,
-        dim_video=dim_video,
-        dim_language=dim_question,
-        d_model=d_model,
-        task_type="classification",
-        num_classes=num_classes,
-        alignment_strategy="reverse",  # 关键：使用反向对齐
-        **kwargs
-    )
-
-
-if __name__ == "__main__":
-    # 示例用法
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
-    # 创建分类模型
-    model = create_align_mamba_classifier(
-        dim_audio=128,
-        dim_video=256, 
-        dim_language=768,
-        num_classes=10,
-        d_model=256,
-        n_layers=4,
-        lambda_align=0.1
-    ).to(device)
-    
-    # 模拟数据
-    batch_size = 4
-    audio = torch.randn(batch_size, 50, 128).to(device)    # 音频：50帧，128维
-    video = torch.randn(batch_size, 30, 256).to(device)    # 视频：30帧，256维
-    language = torch.randn(batch_size, 20, 768).to(device) # 语言：20个token，768维
-    labels = torch.randint(0, 10, (batch_size,)).to(device)
-    
-    # 前向传播
-    outputs = model(audio, video, language, labels=labels, return_alignments=True)
-    
-    print(f"模型使用: {'Mamba' if model.backbone.is_mamba else 'Transformer'}")
-    print(f"Logits shape: {outputs['logits'].shape}")
-    print(f"Total loss: {outputs['loss'].item():.4f}")
-    print(f"Task loss: {outputs['task_loss'].item():.4f}")
-    print(f"Alignment loss: {outputs['alignment_loss'].item():.4f}")
-    print(f"Transport matrix shapes: {[v.shape for v in outputs['transport_matrices'].values()]}")
+        return Xv_tilde, Xa_tilde, Xl_aligned,alignment_loss
