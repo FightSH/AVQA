@@ -1,10 +1,17 @@
+"""
+QA-TIGER配置文件 - 双向对齐策略
+
+该配置启用了双向对齐策略，自动选择最优的对齐方向。
+适用于需要灵活对齐策略的复杂场景。
+"""
+
 config = dict(
     type='qa-tiger',
     seed=3407,
     epochs=30,
     num_labels=42,
     log_interval=100,
-    output_dir='/mnt/sda/shenhao/code/AVQA/QA-TIGER/qa-tiger_clip_vitl14@336px',
+    output_dir='/mnt/sda/shenhao/code/AVQA/QA-TIGER/qa-tiger_clip_vitl14@336px_alignment_bidirectional',
     weight='/mnt/sda/shenhao/code/AVQA/QA-TIGER/qa-tiger_clip_vitl14@336px/2025-06-18-12-34-16_seed713/best.pt',
     pretrained_weight="base",
     mccd=dict(
@@ -17,7 +24,7 @@ config = dict(
         ),
         loss_weight=dict(
             major_loss_weight=1,
-            distribution_loss_weight=0.1,     # 0.01
+            distribution_loss_weight=0.1,
             euclidean_distance_fusion_q_weight=0.2,
             euclidean_distance_fusion_a_weight=0.4,
             euclidean_distance_fusion_v_weight=0.4,
@@ -28,15 +35,15 @@ config = dict(
         ),
         mlp=dict(
             input_dim=512,
-            dimensions=[ 512, 256,42 ],
+            dimensions=[512, 256, 42],
         )
     ),
 
     data=dict(
         root='./data',
         img_size=336,
-        batch_size=32,
-        eval_batch_size=32,
+        batch_size=28,  # 稍小的batch size，因为双向对齐计算量更大
+        eval_batch_size=28,
         num_workers=8,
         frame_sample_rate=1,
         audios_dir='/mnt/sda/shenhao/datasets/MUSIC-AVQA/audio',
@@ -49,25 +56,15 @@ config = dict(
 
         # precomputed features
         quest_feat=None,
-        # (60, 128)
         audio_feat='/mnt/sda/shenhao/datasets/MUSIC-AVQA/feats/imagebind/audio60',
-        # (60, 768)
         video_feat='/mnt/sda/shenhao/datasets/MUSIC-AVQA/feats/qa_tiger/clip_feat/',
-        # (60, 14, 1024)
         patch_feat='/mnt/sda/shenhao/datasets/MUSIC-AVQA/feats/qa_tiger/tome_feat',
-
-        # audio_feat='/mnt/sda/shenhao/datasets/MUSIC-AVQA/feats/qa_tiger/audit_feat/60vggish',
-        # (60, 1152)
-        # video_feat='/mnt/sda/shenhao/datasets/siglip2/MUSIC-AVQA/global_features/',
-        # (60, 196, 1152)
-        # patch_feat='/mnt/sda/shenhao/datasets/siglip2/MUSIC-AVQA/patch_features/',
-
         prompt_feat=None,
     ),
 
     hyper_params=dict(
         gpus='1',
-        model_type="QA-TIGER_ViTL14@336px",
+        model_type="QA-TIGER_ViTL14@336px_Alignment_Bidirectional",
         model=dict(
             d_model=512,
             video_dim=768,
@@ -76,9 +73,7 @@ config = dict(
             audio_dim=1024,
             topK=7,
             num_experts=7,
-            # encoder_type='ViT-L/14@336px',
             encoder_type='openai/clip-vit-large-patch14',
-            # encoder_type='google/siglip2-so400m-patch14-384',
             mccd_flag=False,
             use_ams=False,
             use_mamba=False,
@@ -87,35 +82,35 @@ config = dict(
                 mamba_hidden_dim=256,
                 depths=[2],
                 num_heads=[16],
-                layer_scale= 1e-6,
-                causal=  False,
+                layer_scale=1e-6,
+                causal=False,
                 question_fusion='concat',
                 drop_path_rate=0.1,
             ),
-            use_unified_aggregator=True,
             mamba_aggregator_config=dict(
                 d_model=512,
                 mamba_hidden_dim=256,
                 depths=[2],
-                num_heads=[16], 
+                num_heads=[16],
                 question_fusion='concat',
-                dropout=0.1,),
+                dropout=0.1,
+            ),
             
-            # 对齐配置（新增）
-            use_alignment=False,  # 是否启用跨模态对齐功能
+            # 对齐配置 - 双向策略
+            use_alignment=True,  # 启用对齐功能
             alignment_config=dict(
-                enabled=False,  # 是否启用对齐（与use_alignment保持一致）
-                strategy='reverse',  # 对齐策略: 'standard', 'reverse', 'bidirectional'
-                lambda_align=0.1,  # 对齐损失权重
+                enabled=True,  # 启用对齐
+                strategy='bidirectional',  # 双向对齐策略：自动选择最优方向
+                lambda_align=0.12,  # 中等对齐损失权重
                 ot_eps=1e-8,  # 最优传输数值稳定性参数
-                mmd_sigma=1.0,  # MMD高斯核参数
-                patch_alignment=False,  # 是否对齐patch特征
-                debug_mode=False,  # 是否启用调试模式
-                memory_efficient=False,  # 是否使用内存优化模式
+                mmd_sigma=1.1,  # 中等MMD核参数
+                patch_alignment=True,  # 启用patch特征对齐
+                debug_mode=True,  # 启用调试模式以监控方向选择
+                memory_efficient=True,  # 启用内存优化，双向计算需要更多内存
             )
         ),
         optim=dict(
-            lr=1.5e-4,
+            lr=1.6e-4,  # 中等学习率
             encoder_lr=None,
             min_lr=1e-7,
             weight_decay=1e-2,

@@ -49,7 +49,7 @@ def main():
     best_acc = 0
     best_epoch = -1
     # Early stopping variables
-    patience = 7
+    patience = 9
     patience_counter = 0
 
     if cfg['mccd']['flag'] is True:

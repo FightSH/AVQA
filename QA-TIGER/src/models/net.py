@@ -22,6 +22,7 @@ from .modules import (
     PatchSelecter,  # 导入自定义模块：Patch选择器
     
 )
+from .align_mamba import AlignmentController  # 导入对齐控制器
 
 
 
@@ -46,19 +47,47 @@ class QA_TIGER(nn.Module):
                  use_mamba_aggregator: bool = False, # 是否使用VideoMamba聚合器
                  mamba_aggregator_config: dict = None, # VideoMamba聚合器配置
                  use_unified_aggregator: bool = True, # 是否使用统一序列聚合器
-                 use_align_mamba: bool = False, # 是否使用对齐的Mamba模块
+                 use_alignment: bool = False, # 是否使用跨模态对齐功能
+                 alignment_config: dict = None, # 对齐配置参数
                  mccd=None,
                  **kwargs
     ):
         super(QA_TIGER, self).__init__()
 
-
+        # 保存配置参数
         self.mccd = mccd
         self.use_ams = use_ams
         self.use_mamba = use_mamba
         self.use_video_mamba = use_video_mamba
         self.use_mamba_aggregator = use_mamba_aggregator
         self.use_unified_aggregator = use_unified_aggregator
+        self.use_alignment = use_alignment
+        
+        # 配置验证和对齐模块初始化
+        if use_alignment:
+            alignment_config = alignment_config or {}
+            # 设置默认配置
+            default_alignment_config = {
+                'enabled': True,
+                'strategy': 'reverse',
+                'lambda_align': 0.1,
+                'ot_eps': 1e-8,
+                'mmd_sigma': 1.0,
+                'patch_alignment': True,
+                'debug_mode': False,
+                'memory_efficient': False,
+            }
+            # 合并用户配置和默认配置
+            for key, default_value in default_alignment_config.items():
+                alignment_config.setdefault(key, default_value)
+            
+            # 验证配置并初始化对齐控制器
+            try:
+                self.alignment_controller = AlignmentController(alignment_config)
+            except Exception as e:
+                raise ValueError(f"对齐配置无效: {str(e)}")
+        else:
+            self.alignment_controller = None
 
 
 
@@ -111,12 +140,7 @@ class QA_TIGER(nn.Module):
 
         # self.temporal_aggregator = PAVEModuleV5(input_dim=d_model, output_dim=d_model, embed_dim=512)
         # self.temporal_aggregator2 = PAVEModuleV5(input_dim=d_model, output_dim=d_model, embed_dim=512)
-        # 没有必要再在这里添加了
-        # self.a_attn = AVQCrossAttn(d_model, 8)  # 音频-注意力模块
-        # self.v_attn = AVQCrossAttn(d_model, 8)  # 视频-注意力模块
-        # self.a_attn = nn.MultiheadAttention(d_model, 8 )
-        # self.v_attn = nn.MultiheadAttention(d_model, 8 )
-        # self.p_attn = nn.MultiheadAttention(d_model, 8 )
+
         
         # 定义模型的核心组件
         self.crs_attn = AVQCrossAttn(d_model, 8)  # 音频-视频-问题交叉注意力模块
@@ -302,7 +326,31 @@ class QA_TIGER(nn.Module):
 
         # audio,video = self.feature_adjuster(audio, video)
 
-
+        # 对齐处理（新增）
+        alignment_loss = torch.tensor(0.0, device=audio.device)
+        alignment_debug_info = None
+        if self.use_alignment and self.alignment_controller is not None:
+            try:
+                # print(f"alignbefore audio shape: {audio.shape}")
+                # print(f"alignbefore video shape: {video.shape}")
+                # print(f"alignbefore words shape: {words.shape}")
+                # print(f"alignbefore quest shape: {quest.shape}")
+                # print(f"alignbefore patch shape: {patch.shape}")
+                audio, video, words, quest, patch, alignment_loss, alignment_debug_info = \
+                    self.alignment_controller(audio, video, words, quest, patch)
+                
+                # print(f"align audio shape: {audio.shape}")
+                # print(f"align video shape: {video.shape}")
+                # print(f"align words shape: {words.shape}")
+                # print(f"align quest shape: {quest.shape}")
+                # print(f"align patch shape: {patch.shape}")
+                # print(f"alignment_loss: {alignment_loss}")
+            except Exception as e:
+                # 如果对齐失败，记录错误但继续执行
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"对齐处理失败，继续使用原始特征: {str(e)}")
+                alignment_loss = torch.tensor(0.0, device=audio.device)
 
         q_bias_logits, a_bias_logits, v_bias_logits = None, None, None
         # MCCD模块
@@ -390,6 +438,8 @@ class QA_TIGER(nn.Module):
             return {
                 'out': output,
                 'fusion_logits': output,
+                'alignment_loss': alignment_loss,
+                'alignment_debug_info': alignment_debug_info,
                 'q_bias_logits': q_bias_logits,
                 'a_bias_logits': a_bias_logits,
                 'v_bias_logits': v_bias_logits
@@ -448,6 +498,8 @@ class QA_TIGER(nn.Module):
         return {
             'out': output,
             'fusion_logits': output,
+            'alignment_loss': alignment_loss,
+            'alignment_debug_info': alignment_debug_info,
             'q_bias_logits': q_bias_logits,
             'a_bias_logits': a_bias_logits,
             'v_bias_logits': v_bias_logits
