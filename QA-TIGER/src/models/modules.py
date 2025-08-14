@@ -799,6 +799,19 @@ class PatchSelecter(nn.Module):
         # 初始化 MLP 权重
         self.mlp.apply(self._init_weights)
 
+        # self.mlp_a = nn.Sequential(
+        #     nn.Linear(d_model, d_model // 2),
+        #     nn.ReLU(),
+        #     nn.Linear(d_model // 2, d_model)
+        # )
+        # self.mlp_v = nn.Sequential(
+        #     nn.Linear(d_model, d_model // 2),
+        #     nn.ReLU(),
+        #     nn.Linear(d_model // 2, d_model)
+        # )
+        # self.mlp_a.apply(self._init_weights)
+        # self.mlp_v.apply(self._init_weights)
+
     def _init_weights(self, m: nn.Module):
         """自定义权重初始化函数"""
         if isinstance(m, nn.Linear):
@@ -851,7 +864,7 @@ class PatchSelecter(nn.Module):
         attn_output_crs = self.crs_attn(query_for_crs_attn, patch_self_attended, patch_self_attended)[0]
         # Permute back: (B*T, 2, D)
         attn_output_crs = attn_output_crs.permute(1, 0, 2)
-        # 通过 MLP 和 Dropout进行非线性变换和正则化
+        # # 通过 MLP 和 Dropout进行非线性变换和正则化
         mlp_output = self.mlp(self.dropout(attn_output_crs))  # (B*T, 2, D)
 
         # 将 MLP 输出分割为视频相关和音频相关的部分
@@ -861,6 +874,19 @@ class PatchSelecter(nn.Module):
         # Reshape 回原始的 (B, T, D) 格式
         v_final = v_related_patch_info.reshape(B, T, D)
         a_final = a_related_patch_info.reshape(B, T, D)
+
+        # # 按模态拆分两个 token：idx 0 -> video，idx 1 -> audio
+        # v_token = attn_output_crs[:, 0, :]  # (B*T, D)
+        # a_token = attn_output_crs[:, 1, :]  # (B*T, D)
+
+        # # 分别走各自的 MLP
+        # v_proj = self.mlp_v(self.dropout(v_token))  # (B*T, D)
+        # a_proj = self.mlp_a(self.dropout(a_token))  # (B*T, D)
+
+        # # 回到 (B, T, D)
+        # v_final = v_proj.reshape(B, T, D)
+        # a_final = a_proj.reshape(B, T, D)    
+
 
         # 分别进行层归一化并返回
         return [

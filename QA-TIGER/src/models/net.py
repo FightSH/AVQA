@@ -23,9 +23,8 @@ from .modules import (
     
 )
 from .align_mamba import AlignmentController  # 导入对齐控制器
-
-
-
+from .ca_module.ca_module_standalone import Perceiver
+from .other.other_module import create_fusion_module
 
 
 # 定义QA-TIGER模型类，继承自nn.Module
@@ -44,11 +43,12 @@ class QA_TIGER(nn.Module):
                  use_mamba: bool = False,     # 是否使用mamba模块
                  use_video_mamba: bool = False, # 是否使用VideoMamba模块
                  mamba_config: dict = None,   # VideoMamba配置
-                 use_mamba_aggregator: bool = False, # 是否使用VideoMamba聚合器
+                 use_mamba_aggregator: bool = True, # 是否使用VideoMamba聚合器
                  mamba_aggregator_config: dict = None, # VideoMamba聚合器配置
                  use_unified_aggregator: bool = True, # 是否使用统一序列聚合器
                  use_alignment: bool = False, # 是否使用跨模态对齐功能
                  alignment_config: dict = None, # 对齐配置参数
+                 use_qformer: bool = True, # 是否使用QFormer
                  mccd=None,
                  **kwargs
     ):
@@ -62,6 +62,7 @@ class QA_TIGER(nn.Module):
         self.use_mamba_aggregator = use_mamba_aggregator
         self.use_unified_aggregator = use_unified_aggregator
         self.use_alignment = use_alignment
+        self.use_qformer = use_qformer
         
         # 配置验证和对齐模块初始化
         if use_alignment:
@@ -123,7 +124,16 @@ class QA_TIGER(nn.Module):
                 nn.Dropout(0.1)
             )
 
-        
+
+        if use_qformer:
+            self.perceiver = Perceiver(
+                audio_dim=512,
+                video_dim=512,
+                text_dim=512,
+                num_heads=4,
+                dropout=0.1
+            )
+            
 
         # 初始化CLIP文本编码器用于编码问题文本
         if encoder_type == 'ViT-L/14@336px':
@@ -158,6 +168,14 @@ class QA_TIGER(nn.Module):
                 d_model=d_model,
                 mamba_config=mamba_agg_config
             )
+
+            # self.audio_patch_fusion = create_fusion_module('weighted', d_model)
+            # self.video_patch_fusion = create_fusion_module('weighted', d_model)
+            # 或者使用专门的Mamba融合
+            # from .other.other_module import AudioPatchMambaFusion
+            # self.audio_patch_fusion = AudioPatchMambaFusion(d_model)
+
+
             
             # 不需要单独的at_aggregator和vt_aggregator
             self.at_aggregator = None
@@ -413,6 +431,13 @@ class QA_TIGER(nn.Module):
         # 多模态交互与融合
         # 1. 音频-视频-问题交叉注意力
         audio, video = self.crs_attn(audio, video, words)  # 输出增强后的音频和视频特征: [B, T, D], [B, T, D]
+
+        if(self.use_qformer):
+            # 使用QFormer进行音频、视频和问题的融合
+            video, audio, words = self.perceiver(words, video, audio)
+
+
+
         # 2. Patch选择与融合
         patch = self.patch_selecter(patch, audio, video)  # 基于音频和视频上下文选择并融合patch特征: [B, T, D]
 
@@ -423,6 +448,9 @@ class QA_TIGER(nn.Module):
             if isinstance(patch, list):
                 # 如果patch是list，取平均或选择一个
                 patch_unified = (patch[0] + patch[1]) / 2  # [B, T, D] 简单平均
+                # audio_patch, video_patch = patch[0], patch[1]
+                # audio = self.audio_patch_fusion(audio, audio_patch)
+                # video = self.video_patch_fusion(video, video_patch)
             else:
                 patch_unified = patch  # [B, T, D]
             

@@ -92,7 +92,8 @@ config = dict(
                 question_fusion='concat',
                 drop_path_rate=0.1,
             ),
-            use_unified_aggregator=True,
+            use_unified_aggregator=False,
+            use_qformer=False,
             mamba_aggregator_config=dict(
                 d_model=512,
                 mamba_hidden_dim=256,
@@ -115,7 +116,7 @@ config = dict(
             )
         ),
         optim=dict(
-            lr=1.5e-4,
+            lr=1.7e-4,
             encoder_lr=None,
             min_lr=1e-7,
             weight_decay=1e-2,

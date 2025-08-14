@@ -25,7 +25,7 @@ class VideoMambaAggregator(nn.Module):
         mamba_hidden_dim: int = 256,
         depths: list = None,
         num_heads: list = None,
-        question_fusion: str = "cross_attn",  # "concat", "cross_attn", "add"
+        question_fusion: str = "concat",  # "concat", "cross_attn", "add"
         dropout: float = 0.1,
         **kwargs
     ):
@@ -236,12 +236,12 @@ class DualVideoMambaAggregator(nn.Module):
             audio_patch, video_patch = patch  # 每个都是 [B, T, D]
             
             # 分别处理video和patch
-            video_global = self.aggregator(question, video=video)        # [B, 1, D]
+            # video_global = self.aggregator(question, video=video)        # [B, 1, D]
             audio_patch_global = self.aggregator(question, video=audio_patch)  # [B, 1, D]
             video_patch_global = self.aggregator(question, video=video_patch)  # [B, 1, D]
             
             # 先squeeze再通过头处理，最后再unsqueeze
-            video_global_squeezed = video_global.squeeze(1)  # [B, D]
+            # video_global_squeezed = video_global.squeeze(1)  # [B, D]
             audio_patch_squeezed = audio_patch_global.squeeze(1)  # [B, D]
             video_patch_squeezed = video_patch_global.squeeze(1)  # [B, D]
             
@@ -484,6 +484,7 @@ class MultiModalUnifiedAggregator(nn.Module):
         for t in range(T):
             unified_tokens.append(video_proj[:, t:t+1, :])  # (B, 1, D)
             unified_tokens.append(audio_proj[:, t:t+1, :])  # (B, 1, D)
+            # unified_tokens.append(question.unsqueeze(1))
             unified_tokens.append(patch_proj[:, t:t+1, :])  # (B, 1, D)
         
         # 拼接成统一序列
@@ -496,7 +497,8 @@ class MultiModalUnifiedAggregator(nn.Module):
         question: Tensor, 
         video: Tensor, 
         audio: Tensor, 
-        patch: Tensor
+        patch: Optional[Tensor] = None,
+        use_patch: bool = True
     ) -> Tensor:
         """
         前向传播
@@ -505,29 +507,64 @@ class MultiModalUnifiedAggregator(nn.Module):
             question: (B, D) 问题特征
             video: (B, T, D) 视频特征
             audio: (B, T, D) 音频特征
-            patch: (B, T, D) patch特征
+            patch: (B, T, D) patch特征，可选
+            use_patch: 是否使用patch特征
         Returns:
             output: (B, 1, D) 聚合后的全局特征
         """
-        # 创建统一的多模态序列
-        unified_seq = self.create_unified_sequence(video, audio, patch, question)  # (B, T*3, D)
-        
-        # 处理问题特征 - 扩展到时序维度作为"音频"输入
-        # question_proj = self.question_proj(question)  # (B, D)
-        # 将问题特征复制到与统一序列相同的时序长度
-        # question_seq = question_proj.unsqueeze(1).expand(-1, unified_seq.size(1), -1)  # (B, T*3, D)
+        if use_patch and patch is not None:
+            # 创建统一的多模态序列（包含patch）
+            unified_seq = self.create_unified_sequence(video, audio, patch, question)  # (B, T*3, D)
+        else:
+            # 只使用audio和video创建序列
+            unified_seq = self.create_unified_sequence_without_patch(video, audio, question)  # (B, T*2, D)
         
         # 通过VideoMambaVision处理
-        # unified_seq作为"图像序列"，question_seq作为"音频序列"
         global_features = self.video_mamba.forward_united_feature(unified_seq)  # (B, mamba_hidden_dim*2)
-        # print(f"global_features shape: {global_features.shape}")
+        
         # 输出适配
         output = self.output_adapter(global_features)  # (B, D)
-        # print(f"output shape: {output.shape}")
+        
         # 添加时间维度以匹配其他聚合器的输出格式
         output = output.unsqueeze(1)  # (B, 1, D)
         
         return output
+    
+    def create_unified_sequence_without_patch(
+        self, 
+        video: Tensor, 
+        audio: Tensor, 
+        question: Tensor
+    ) -> Tensor:
+        """
+        创建不包含patch的统一多模态序列
+        
+        Args:
+            video: (B, T, D) 视频特征
+            audio: (B, T, D) 音频特征  
+            question: (B, D) 问题特征
+        Returns:
+            unified_seq: (B, T*2, D) 统一的多模态序列
+        """
+        B, T, D = video.shape
+        
+        video_proj = video  # (B, T, D)
+        audio_proj = audio  # (B, T, D)
+        
+        # 添加模态嵌入
+        video_proj = video_proj + self.video_modal_embed.expand(B, T, -1)
+        audio_proj = audio_proj + self.audio_modal_embed.expand(B, T, -1)
+        
+        # 按时间步组合：[v1, a1, v2, a2, ..., vT, aT]
+        unified_tokens = []
+        for t in range(T):
+            unified_tokens.append(video_proj[:, t:t+1, :])  # (B, 1, D)
+            unified_tokens.append(audio_proj[:, t:t+1, :])  # (B, 1, D)
+        
+        # 拼接成统一序列
+        unified_seq = torch.cat(unified_tokens, dim=1)  # (B, T*2, D)
+        
+        return unified_seq
 
 
 class MultiModalUnifiedDualAggregator(nn.Module):
@@ -609,6 +646,41 @@ class MultiModalUnifiedDualAggregator(nn.Module):
         return output1.unsqueeze(1), output2.unsqueeze(1)  # (B, 1, D), (B, 1, D)
 
 
+class FusionAwareUnifiedAggregator(MultiModalUnifiedAggregator):
+    """
+    融合感知的统一聚合器
+    专门处理已经融合了patch信息的audio和video特征
+    """
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
+        # 重新定义模态嵌入，考虑到特征已经融合
+        self.fused_audio_modal_embed = nn.Parameter(torch.randn(1, 1, self.d_model) * 0.02)
+        self.fused_video_modal_embed = nn.Parameter(torch.randn(1, 1, self.d_model) * 0.02)
+    
+    def forward(
+        self, 
+        question: Tensor, 
+        fused_video: Tensor, 
+        fused_audio: Tensor, 
+        patch: Optional[Tensor] = None
+    ) -> Tensor:
+        """
+        处理已经融合patch信息的audio和video特征
+        
+        Args:
+            question: (B, D) 问题特征
+            fused_video: (B, T, D) 已融合patch的视频特征
+            fused_audio: (B, T, D) 已融合patch的音频特征
+            patch: 忽略此参数
+        Returns:
+            output: (B, 1, D) 聚合后的全局特征
+        """
+        # 只使用融合后的audio和video，不再使用patch
+        return super().forward(question, fused_video, fused_audio, fused_audio, use_patch=False)
+
+
 def create_mamba_aggregator(
     aggregator_type: str = "single",
     d_model: int = 512,
@@ -619,7 +691,7 @@ def create_mamba_aggregator(
     工厂函数，创建不同类型的VideoMamba聚合器
     
     Args:
-        aggregator_type: "single", "dual", "unified", "unified_single", "unified_dual"
+        aggregator_type: "single", "dual", "unified", "unified_single", "unified_dual", "fusion_aware"
         d_model: 模型维度
         mamba_config: VideoMamba配置
     Returns:
@@ -633,7 +705,7 @@ def create_mamba_aggregator(
         'mamba_hidden_dim': mamba_config.get('mamba_hidden_dim', d_model // 2),
         'depths': mamba_config.get('depths', [2]),
         'num_heads': mamba_config.get('num_heads', [8]),
-        'question_fusion': mamba_config.get('question_fusion', 'cross_attn'),
+        'question_fusion': mamba_config.get('question_fusion', 'concat'),
         'dropout': mamba_config.get('dropout', 0.1),
         **kwargs
     }
@@ -652,6 +724,10 @@ def create_mamba_aggregator(
         # 新的统一序列聚合器 - 双输出
         unified_config = {k: v for k, v in config.items() if k != 'question_fusion'}
         return MultiModalUnifiedDualAggregator(**unified_config)
+    elif aggregator_type == "fusion_aware":
+        # 融合感知聚合器
+        unified_config = {k: v for k, v in config.items() if k != 'question_fusion'}
+        return FusionAwareUnifiedAggregator(**unified_config)
     else:
         raise ValueError(f"Unknown aggregator_type: {aggregator_type}")
 
